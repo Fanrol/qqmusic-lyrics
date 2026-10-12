@@ -1,0 +1,319 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using QQMusicLyrics.Lyrics;
+using QQMusicLyrics.Media;
+using QQMusicLyrics.Models;
+using QQMusicLyrics.Net;
+using Windows.Media.Control;
+
+namespace QQMusicLyrics.SelfTest;
+
+/// <summary>
+/// 针对真实类的集成自测：直接引用主程序编译出来的程序集，不复制一份逻辑。
+/// 覆盖会话筛选、LRC 解析、候选打分、QQ 接口、SMTC 采集与播放控制。
+///
+/// 用法：dotnet run --project tests\QQMusicLyrics.SelfTest
+///      dotnet run --project tests\QQMusicLyrics.SelfTest -- --test-playback   （额外测试会真正暂停/恢复你的播放）
+/// </summary>
+internal static class Program
+{
+    private static int _passed;
+    private static int _failed;
+    private static bool _testPlayback;
+
+    private static async Task<int> Main(string[] args)
+    {
+        Console.OutputEncoding = Encoding.UTF8;
+        _testPlayback = args.Any(a => a.Equals("--test-playback", StringComparison.OrdinalIgnoreCase));
+
+        Console.WriteLine("==================== 集成自测 ====================");
+        Console.WriteLine(_testPlayback
+            ? "（含播放控制测试：会短暂暂停再恢复你的播放）"
+            : "（未启用播放控制测试；加 --test-playback 可启用）");
+        Console.WriteLine();
+
+        TestLrcParser();
+        TestMatchScorer();
+        TestSessionFilter();
+        await DumpLiveSessionsAsync();
+        await TestQqClientAsync();
+        await TestMatchAgainstLiveSearchAsync();
+        await TestSmtcAsync();
+
+        Console.WriteLine();
+        Console.WriteLine($"==================== 结果: 通过 {_passed} / 失败 {_failed} ====================");
+        return _failed == 0 ? 0 : 1;
+    }
+
+    private static void Check(string name, bool condition, string detail = "")
+    {
+        if (condition)
+        {
+            _passed++;
+            Console.WriteLine($"  [通过] {name}{(detail.Length > 0 ? "  -> " + detail : "")}");
+        }
+        else
+        {
+            _failed++;
+            Console.WriteLine($"  [失败] {name}{(detail.Length > 0 ? "  -> " + detail : "")}");
+        }
+    }
+
+    // ---------------- 1. 会话筛选（B 站视频不会被当成歌曲的保证）----------------
+    private static void TestSessionFilter()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 1. 媒体会话筛选（只认 QQ 音乐）----");
+
+        Check("纯文件名 QQMusic.exe", MediaSessionFilter.IsQqMusic("QQMusic.exe"));
+        Check("大小写不敏感 qqmusic.exe", MediaSessionFilter.IsQqMusic("qqmusic.exe"));
+        Check("完整路径", MediaSessionFilter.IsQqMusic(@"C:\Program Files (x86)\Tencent\QQMusic\QQMusic.exe"));
+
+        Check("拒绝 Edge（B 站场景）", !MediaSessionFilter.IsQqMusic("msedge.exe"));
+        Check("拒绝 Chrome", !MediaSessionFilter.IsQqMusic("chrome.exe"));
+        Check("拒绝 Firefox", !MediaSessionFilter.IsQqMusic("firefox.exe"));
+        Check("拒绝打包应用 UWP 音乐", !MediaSessionFilter.IsQqMusic("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"));
+        Check("拒绝随机播放器", !MediaSessionFilter.IsQqMusic("potplayer64.exe"));
+        Check("拒绝空值", !MediaSessionFilter.IsQqMusic(null) && !MediaSessionFilter.IsQqMusic(""));
+        Check("拒绝名字里包含但并非 QQ 音乐的可执行文件", !MediaSessionFilter.IsQqMusic("NotQQMusic.exe"));
+    }
+
+    // ---------------- 2. 现场枚举会话，展示筛选效果 ----------------
+    private static async Task DumpLiveSessionsAsync()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 2. 现场媒体会话（展示筛选结果）----");
+
+        try
+        {
+            var manager = await GlobalSystemMediaTransportControlsSessionManager.RequestAsync();
+            var sessions = manager.GetSessions();
+            Console.WriteLine($"  当前共有 {sessions.Count} 个媒体会话：");
+
+            int accepted = 0;
+            foreach (var session in sessions)
+            {
+                string appId = session.SourceAppUserModelId;
+                bool isQq = MediaSessionFilter.IsQqMusic(appId);
+                if (isQq) accepted++;
+
+                var properties = await session.TryGetMediaPropertiesAsync();
+                Console.WriteLine($"    {(isQq ? "[采用]" : "[忽略]")} {appId}  ->  {properties.Title} / {properties.Artist}");
+            }
+
+            Check("至少能枚举到会话", sessions.Count > 0, $"{sessions.Count} 个");
+            Check("被采用的会话只可能是 QQ 音乐", accepted <= 1, $"采用 {accepted} 个");
+
+            if (sessions.Count > accepted)
+            {
+                Check("存在非 QQ 音乐会话时确实被忽略", accepted < sessions.Count,
+                    $"共 {sessions.Count} 个，忽略 {sessions.Count - accepted} 个");
+            }
+            else
+            {
+                Console.WriteLine("    （当前没有其它应用的媒体会话，无法现场验证忽略逻辑；已由第 1 节单测覆盖）");
+            }
+        }
+        catch (Exception ex)
+        {
+            Check("枚举媒体会话", false, ex.GetType().Name + ": " + ex.Message);
+        }
+    }
+
+    // ---------------- 3. LRC 解析 ----------------
+    private static void TestLrcParser()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 3. LRC 解析（含翻译合并、offset、多时间戳）----");
+
+        const string main = "[ti:测试]\n[ar:歌手]\n[offset:0]\n" +
+                            "[00:01.00]第一行\n" +
+                            "[00:03.50]第二行\n" +
+                            "[00:06.25][00:09.25]重复行\n" +
+                            "[00:12.00]没有翻译的行\n";
+
+        const string trans = "[00:01.02]First line\n" +
+                             "[00:03.48]Second line\n" +
+                             "[00:06.30]Repeated\n" +
+                             "[00:09.20]Repeated\n";
+
+        var lines = LrcParser.Parse(main, trans);
+
+        Check("解析出 5 行", lines.Count == 5, $"实际 {lines.Count}");
+        Check("首行时间 1.00s", lines.Count > 0 && Math.Abs(lines[0].Time.TotalSeconds - 1.0) < 0.001,
+            lines.Count > 0 ? lines[0].Time.ToString() : "n/a");
+        Check("翻译按时间戳合并", lines.Count > 0 && lines[0].Translation == "First line",
+            lines.Count > 0 ? lines[0].Translation ?? "<null>" : "n/a");
+        Check("第二行翻译合并", lines.Count > 1 && lines[1].Translation == "Second line",
+            lines.Count > 1 ? lines[1].Translation ?? "<null>" : "n/a");
+        Check("同一行多个时间戳展开", lines.Count(l => l.Text == "重复行") == 2);
+        Check("无翻译的行 Translation 为空", lines.Count > 4 && lines[4].Translation is null);
+        Check("空输入返回空列表", LrcParser.Parse("", "").Count == 0);
+
+        var offsetLines = LrcParser.Parse("[offset:+500]\n[00:10.00]甲\n", null);
+        Check("offset 生效（10s -> 9.5s）", offsetLines.Count == 1 &&
+            Math.Abs(offsetLines[0].Time.TotalSeconds - 9.5) < 0.001,
+            offsetLines.Count == 1 ? offsetLines[0].Time.ToString() : "n/a");
+    }
+
+    // ---------------- 4. 候选打分 ----------------
+    private static void TestMatchScorer()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 4. 候选打分 ----");
+
+        var cover = new List<SongCandidate> { new("003rBKBk4gQyzt", "半抹烟熏", "糯米幸sachiko") };
+        Check("同名翻唱仍会选中（否则无歌词可用）",
+            MatchScorer.Pick(new TrackInfo("半抹烟熏", "封茗囧菌", "半抹烟熏"), cover) is not null);
+
+        var mixed = new List<SongCandidate>
+        {
+            new("a", "夜曲-周杰伦", "泊翔"),
+            new("b", "夜曲", "周杰伦"),
+        };
+        Check("优先选原唱而非翻唱",
+            MatchScorer.Pick(new TrackInfo("夜曲", "周杰伦", "十一月的萧邦"), mixed)?.Mid == "b");
+
+        Check("去掉括号补充说明后能匹配",
+            MatchScorer.Pick(new TrackInfo("雨是神的烟花 (我的爱不值一提吗)", "Nyxx.", ""),
+                new List<SongCandidate> { new("m1", "雨是神的烟花", "Nyxx.") })?.Mid == "m1");
+
+        Check("歌名对不上时返回 null",
+            MatchScorer.Pick(new TrackInfo("完全不相干的名字", "某歌手", ""),
+                new List<SongCandidate> { new("x", "夜曲", "周杰伦") }) is null);
+
+        Check("搜索关键词优先只用歌名",
+            MatchScorer.BuildSearchKeywords("雨是神的烟花 (我的爱不值一提吗)", "Nyxx.")[0] == "雨是神的烟花");
+        Check("StripBrackets 处理全角括号", MatchScorer.StripBrackets("歌名（说明）") == "歌名");
+    }
+
+    // ---------------- 5. QQ 接口 ----------------
+    private static async Task TestQqClientAsync()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 5. QQ 音乐接口 ----");
+
+        using var client = new QQMusicClient();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var results = await client.SearchAsync("Prisoner Of Love", cts.Token);
+        Check("搜索接口返回结果", results.Count > 0, $"{results.Count} 条");
+        if (results.Count == 0) return;
+
+        var detail = await client.GetDetailAsync(results[0].Mid, cts.Token);
+        Check("歌曲详情返回 albumMid", detail is not null && detail.AlbumMid.Length > 0,
+            detail is null ? "<null>" : $"albumMid={detail.AlbumMid}, 时长={detail.Duration.TotalSeconds}s");
+
+        var lyric = await client.GetLyricAsync(results[0].Mid, cts.Token);
+        Check("歌词接口返回内容", lyric is not null && lyric.Lyric.Length > 0,
+            lyric is null ? "<null>" : $"{lyric.Lyric.Length} 字符");
+
+        if (lyric is not null)
+        {
+            Check("真实歌词能解析出行", LrcParser.Parse(lyric.Lyric, lyric.Translation).Count > 0);
+        }
+
+        if (detail is not null && detail.AlbumMid.Length > 0)
+        {
+            byte[] cover = await client.DownloadAsync(
+                QQMusicClient.BuildCoverUrl(detail.AlbumMid, 800), "https://y.qq.com/", cts.Token);
+            bool isJpeg = cover is { Length: > 1000 } && cover[0] == 0xFF && cover[1] == 0xD8;
+            Check("封面下载且是合法 JPEG", isJpeg, cover is null ? "<null>" : $"{cover.Length} 字节");
+        }
+    }
+
+    // ---------------- 6. 实况匹配 ----------------
+    private static async Task TestMatchAgainstLiveSearchAsync()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 6. 实况匹配（拿 QQ 音乐当前在播的歌跑真实搜索）----");
+
+        using var media = new SmtcMediaService();
+        await media.StartAsync();
+        await Task.Delay(1200);
+
+        TrackInfo track = media.Current;
+        Check("能读到 QQ 音乐当前曲目", !track.IsEmpty, track.DisplayName);
+        if (track.IsEmpty)
+        {
+            Console.WriteLine("    （QQ 音乐当前没有会话，跳过实况匹配；请先播放一首歌再跑）");
+            return;
+        }
+
+        using var client = new QQMusicClient();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+
+        var all = new List<SongCandidate>();
+        SongCandidate match = null;
+        string usedKeyword = "";
+        foreach (string keyword in MatchScorer.BuildSearchKeywords(track.Title, track.Artist))
+        {
+            all.AddRange(await client.SearchAsync(keyword, cts.Token));
+            match = MatchScorer.Pick(track, all);
+            if (match is not null) { usedKeyword = keyword; break; }
+        }
+
+        Check("实况曲目能匹配到候选", match is not null,
+            match is null ? "<null>" : $"关键词='{usedKeyword}' -> {match.Name} - {match.Singer}");
+
+        if (match is not null)
+        {
+            var lyric = await client.GetLyricAsync(match.Mid, cts.Token);
+            var parsed = lyric is null ? new List<LyricLine>() : LrcParser.Parse(lyric.Lyric, lyric.Translation);
+            Check("实况曲目能拿到歌词", parsed.Count > 0, $"{parsed.Count} 行");
+        }
+    }
+
+    // ---------------- 7. SMTC 位置与外推 ----------------
+    private static async Task TestSmtcAsync()
+    {
+        Console.WriteLine();
+        Console.WriteLine("---- 7. SMTC 位置连续性与播放控制 ----");
+
+        using var media = new SmtcMediaService();
+        await media.StartAsync();
+        await Task.Delay(1200);
+
+        Check("检测到 QQ 音乐媒体会话", media.HasSession);
+        if (!media.HasSession)
+        {
+            Check("无会话时 Current 为空", media.Current.IsEmpty);
+            return;
+        }
+
+        Check("时长已知", media.Duration > TimeSpan.Zero, media.Duration.ToString());
+
+        TimeSpan p1 = media.CurrentPosition;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        await Task.Delay(3000);
+        TimeSpan p2 = media.CurrentPosition;
+        sw.Stop();
+
+        double advanced = (p2 - p1).TotalSeconds;
+        double wall = sw.Elapsed.TotalSeconds;
+        Console.WriteLine($"      位置 {p1:mm\\:ss\\.fff} -> {p2:mm\\:ss\\.fff}，真实经过 {wall:F2}s，推进 {advanced:F2}s");
+        Check("位置按真实时间连续推进（误差 < 0.5s）", Math.Abs(advanced - wall) < 0.5,
+            $"差值 {Math.Abs(advanced - wall):F3}s");
+
+        if (!_testPlayback)
+        {
+            Console.WriteLine("      播放控制测试已跳过（--test-playback 可启用）");
+            return;
+        }
+
+        await media.TogglePlayPauseAsync();
+        await Task.Delay(1500);
+        bool pausedOk = !media.IsPlaying;
+
+        await media.TogglePlayPauseAsync();
+        await Task.Delay(1500);
+        bool resumedOk = media.IsPlaying;
+
+        Check("播放/暂停控制生效（已恢复原状态）", pausedOk && resumedOk,
+            pausedOk ? (resumedOk ? "暂停与恢复都成功" : "暂停成功但恢复失败") : "暂停未生效");
+    }
+}

@@ -64,9 +64,9 @@ public sealed class AppCommands
         ApplyAndNotify();
     }
 
-    public void ToggleHideWhenIdle()
+    public void ToggleHideWhenNoQqMusic()
     {
-        _settings.HideWhenIdle = !_settings.HideWhenIdle;
+        _settings.HideWhenNoQqMusic = !_settings.HideWhenNoQqMusic;
         ApplyAndNotify();
     }
 
@@ -75,12 +75,6 @@ public sealed class AppCommands
     public void ToggleTranslation()
     {
         _settings.ShowTranslation = !_settings.ShowTranslation;
-        ApplyAndNotify();
-    }
-
-    public void ToggleNeighborLines()
-    {
-        _settings.ShowNeighborLines = !_settings.ShowNeighborLines;
         ApplyAndNotify();
     }
 
@@ -95,13 +89,13 @@ public sealed class AppCommands
 
     private void ChangeFont(double delta)
     {
-        _settings.FontSize = Math.Min(120, Math.Max(14, _settings.FontSize + delta));
+        _settings.FontSize = Math.Min(120, Math.Max(12, _settings.FontSize + delta));
         ApplyAndNotify();
     }
 
     public void ResetFont()
     {
-        _settings.FontSize = 34;
+        _settings.FontSize = AppSettings.DefaultFontSize;
         ApplyAndNotify();
     }
 

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>QQMusicLyrics.SelfTest</AssemblyName>
+    <RootNamespace>QQMusicLyrics.SelfTest</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 直接引用主程序集：测的是真代码，不是复制一份逻辑 -->
+    <ProjectReference Include="..\..\src\QQMusicLyrics\QQMusicLyrics.csproj" />
+  </ItemGroup>
+
+</Project>

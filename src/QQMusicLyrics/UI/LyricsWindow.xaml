@@ -15,41 +15,28 @@
         TextOptions.TextFormattingMode="Ideal">
 
     <Grid x:Name="Root">
-        <!-- 可选背景板：给纯白歌词垫一层深色底，在亮色游戏画面上更易读 -->
+        <!-- 可选背景板：给纯白歌词垫一层深色底，在亮色画面上更易读 -->
         <Border x:Name="Backdrop"
-                CornerRadius="16"
+                CornerRadius="10"
                 Background="#FF000000"
-                Opacity="0.28" />
+                Opacity="0.30" />
 
-        <!-- 歌词主体：上一行 / 当前行 / 翻译 / 下一行 -->
-        <StackPanel x:Name="LyricsPanel"
+        <!-- 单行歌词（需要翻译时是它下面的一小行） -->
+        <StackPanel x:Name="ContentPanel"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Stretch"
-                    Margin="30,10,30,10">
-
-            <TextBlock x:Name="PrevLine"
-                       TextAlignment="Center"
-                       TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis"
-                       Foreground="#B0FFFFFF"
-                       FontFamily="Microsoft YaHei UI"
-                       FontWeight="SemiBold"
-                       Margin="0,0,0,2">
-                <TextBlock.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="9" ShadowDepth="0" Opacity="0.9" />
-                </TextBlock.Effect>
-            </TextBlock>
+                    Margin="16,4,16,4">
 
             <TextBlock x:Name="CurrentLine"
                        TextAlignment="Center"
-                       TextWrapping="Wrap"
+                       TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis"
                        Foreground="White"
                        FontFamily="Microsoft YaHei UI"
                        FontWeight="Bold"
-                       Margin="0,2,0,2"
                        RenderTransformOrigin="0.5,0.5">
                 <TextBlock.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="12" ShadowDepth="0" Opacity="0.95" />
+                    <DropShadowEffect Color="Black" BlurRadius="8" ShadowDepth="0" Opacity="0.95" />
                 </TextBlock.Effect>
                 <TextBlock.RenderTransform>
                     <TranslateTransform x:Name="CurrentLineOffset" X="0" Y="0" />
@@ -58,43 +45,33 @@
 
             <TextBlock x:Name="TranslationLine"
                        TextAlignment="Center"
-                       TextWrapping="Wrap"
+                       TextWrapping="NoWrap"
+                       TextTrimming="CharacterEllipsis"
                        Foreground="#D8A8E6FF"
                        FontFamily="Microsoft YaHei UI"
                        FontWeight="Normal"
-                       Margin="0,1,0,2">
+                       Margin="0,2,0,0"
+                       Visibility="Collapsed">
                 <TextBlock.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="9" ShadowDepth="0" Opacity="0.9" />
-                </TextBlock.Effect>
-            </TextBlock>
-
-            <TextBlock x:Name="NextLine"
-                       TextAlignment="Center"
-                       TextWrapping="Wrap"
-                       TextTrimming="CharacterEllipsis"
-                       Foreground="#B0FFFFFF"
-                       FontFamily="Microsoft YaHei UI"
-                       FontWeight="SemiBold"
-                       Margin="0,2,0,0">
-                <TextBlock.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="9" ShadowDepth="0" Opacity="0.9" />
+                    <DropShadowEffect Color="Black" BlurRadius="7" ShadowDepth="0" Opacity="0.9" />
                 </TextBlock.Effect>
             </TextBlock>
         </StackPanel>
 
-        <!-- 无歌词 / 等待播放时显示的状态文字 -->
+        <!-- 临时状态文字：正在匹配歌词 / 未找到歌词 -->
         <TextBlock x:Name="StatusLine"
                    TextAlignment="Center"
-                   TextWrapping="Wrap"
+                   TextWrapping="NoWrap"
+                   TextTrimming="CharacterEllipsis"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
-                   Margin="30,0"
+                   Margin="16,0"
                    Foreground="#C8FFFFFF"
                    FontFamily="Microsoft YaHei UI"
                    FontWeight="SemiBold"
                    Visibility="Collapsed">
             <TextBlock.Effect>
-                <DropShadowEffect Color="Black" BlurRadius="9" ShadowDepth="0" Opacity="0.9" />
+                <DropShadowEffect Color="Black" BlurRadius="7" ShadowDepth="0" Opacity="0.9" />
             </TextBlock.Effect>
         </TextBlock>
     </Grid>

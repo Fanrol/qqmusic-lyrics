@@ -20,13 +20,12 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _visibleItem = new("显示浮窗");
     private readonly ToolStripMenuItem _clickThroughItem = new("鼠标穿透（打游戏不挡操作）");
     private readonly ToolStripMenuItem _lockedItem = new("锁定位置");
-    private readonly ToolStripMenuItem _hideWhenIdleItem = new("无播放时自动隐藏");
+    private readonly ToolStripMenuItem _hideWhenNoQqMusicItem = new("QQ 音乐未运行时隐藏");
 
     private readonly ToolStripMenuItem _translationItem = new("显示翻译歌词");
-    private readonly ToolStripMenuItem _neighborItem = new("显示上下行歌词");
     private readonly ToolStripMenuItem _backdropItem = new("显示深色背景板");
     private readonly ToolStripMenuItem _offsetItem = new("歌词偏移：0 ms");
-    private readonly ToolStripMenuItem _fontItem = new("字号：34");
+    private readonly ToolStripMenuItem _fontItem = new("字号：30");
 
     private readonly ToolStripMenuItem _autoStartItem = new("开机自启");
 
@@ -56,12 +55,12 @@ public sealed class TrayIcon : IDisposable
         _visibleItem.Click += (_, _) => _commands.ToggleVisible();
         _clickThroughItem.Click += (_, _) => _commands.ToggleClickThrough();
         _lockedItem.Click += (_, _) => _commands.ToggleLocked();
-        _hideWhenIdleItem.Click += (_, _) => _commands.ToggleHideWhenIdle();
+        _hideWhenNoQqMusicItem.Click += (_, _) => _commands.ToggleHideWhenNoQqMusic();
 
         _menu.Items.Add(_visibleItem);
         _menu.Items.Add(_clickThroughItem);
         _menu.Items.Add(_lockedItem);
-        _menu.Items.Add(_hideWhenIdleItem);
+        _menu.Items.Add(_hideWhenNoQqMusicItem);
         _menu.Items.Add(new ToolStripSeparator());
 
         _menu.Items.Add(MakeItem("上一首", () => _commands.PreviousTrack()));
@@ -73,10 +72,8 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(new ToolStripSeparator());
 
         _translationItem.Click += (_, _) => _commands.ToggleTranslation();
-        _neighborItem.Click += (_, _) => _commands.ToggleNeighborLines();
         _backdropItem.Click += (_, _) => _commands.ToggleBackdrop();
         _menu.Items.Add(_translationItem);
-        _menu.Items.Add(_neighborItem);
         _menu.Items.Add(_backdropItem);
 
         var offsetEarlier = MakeItem("歌词提前 100 ms", () => _commands.ShiftLyrics(+100));
@@ -118,9 +115,8 @@ public sealed class TrayIcon : IDisposable
         _visibleItem.Checked = _commands.IsVisible;
         _clickThroughItem.Checked = _commands.Settings.ClickThrough;
         _lockedItem.Checked = _commands.Settings.Locked;
-        _hideWhenIdleItem.Checked = _commands.Settings.HideWhenIdle;
+        _hideWhenNoQqMusicItem.Checked = _commands.Settings.HideWhenNoQqMusic;
         _translationItem.Checked = _commands.Settings.ShowTranslation;
-        _neighborItem.Checked = _commands.Settings.ShowNeighborLines;
         _backdropItem.Checked = _commands.Settings.ShowBackdrop;
         _offsetItem.Text = $"歌词偏移：{_commands.Settings.LyricOffsetMs} ms";
         _fontItem.Text = $"字号：{_commands.Settings.FontSize:0}";

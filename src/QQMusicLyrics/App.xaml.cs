@@ -85,7 +85,7 @@ public partial class App : Application
         catch (Exception ex)
         {
             Log.Error("启动 SMTC 采集失败", ex);
-            _window.ShowStatus("无法读取系统媒体信息\n" + ex.Message);
+            _window.SetStatus("无法读取系统媒体信息");
         }
     }
 
@@ -98,9 +98,10 @@ public partial class App : Application
 
         if (track.IsEmpty)
         {
+            // 没有 QQ 音乐会话：清空内容，浮窗会自己隐藏（见 LyricsWindow.UpdateVisibility）
             Dispatcher.Invoke(() =>
             {
-                _window.ShowStatus("等待 QQ 音乐播放…");
+                _window.SetStatus(string.Empty);
                 _tray.UpdateTrackInfo(track, null);
             });
             return;
@@ -113,7 +114,7 @@ public partial class App : Application
     {
         await Dispatcher.InvokeAsync(() =>
         {
-            _window.ShowStatus($"正在匹配歌词…\n{track.DisplayName}");
+            _window.SetStatus("正在匹配歌词…");
             _tray.UpdateTrackInfo(track, null);
         });
 

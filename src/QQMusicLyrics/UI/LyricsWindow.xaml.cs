@@ -1,9 +1,12 @@
 using System;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
+using QQMusicLyrics.Infra;
 using QQMusicLyrics.Interop;
 using QQMusicLyrics.Media;
 using QQMusicLyrics.Models;
@@ -13,26 +16,37 @@ namespace QQMusicLyrics.UI;
 
 /// <summary>
 /// 浮窗本体：无边框 + 逐像素透明 + 置顶 + 不出现在 Alt+Tab/任务栏。
-/// 界面只负责"把当前这一行歌词画出来"，所有数据来自 SmtcMediaService 与 LyricResolver。
+/// 默认只有一行歌词，换行时直接切换（不做滚动，也不显示上下句）。
+///
+/// 显示规则：只有存在 QQ 音乐媒体会话时才显示。浏览器放 B 站视频同样会产生
+/// SMTC 会话，但采集层只认 QQMusic.exe，所以这里 HasSession 为 false 时
+/// 浮窗会完全隐藏——这正是"QQ 音乐没在用时什么都不显示"。
 /// </summary>
 public partial class LyricsWindow : Window
 {
+    /// <summary>歌词左右留白（要与 XAML 里 ContentPanel 的 Margin 保持一致），用于计算可用宽度。</summary>
+    private const double LineSidePadding = 16;
+
+    /// <summary>自动缩字的下限，再长就交给省略号。</summary>
+    private const double MinAutoFontSize = 12;
+
     private readonly SmtcMediaService _media;
     private readonly AppSettings _settings;
     private readonly DispatcherTimer _ticker;
-    private readonly DateTime _startupGraceUntil = DateTime.Now.AddSeconds(15);
 
     private ResolvedLyrics _lyrics = ResolvedLyrics.Empty;
     private int _lineIndex = -1;
+    private bool _showingLyrics;
+
+    /// <summary>Loaded 之后才允许改动可见性：在窗口真正 Show 之前把它设成 Hidden 会留下不一致状态。</summary>
+    private bool _ready;
+
     private IntPtr _handle = IntPtr.Zero;
 
     private bool _dragging;
     private Point _dragStartMouse;   // 按下时鼠标的屏幕位置（DIP）
     private double _dragOriginLeft;
     private double _dragOriginTop;
-
-    private bool _idleHidden;
-    private string _transientStatus = string.Empty;
 
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
@@ -66,10 +80,15 @@ public partial class LyricsWindow : Window
         SourceInitialized += OnSourceInitialized;
         Loaded += (_, _) =>
         {
+            _ready = true;
             ApplySettings();
+            UpdateVisibility();
             _ticker.Start();
         };
         Closing += (_, _) => SaveBounds();
+
+        // QQ 音乐会话出现/消失时立刻响应，不依赖 30fps 的轮询
+        _media.SessionAvailabilityChanged += OnSessionAvailabilityChanged;
 
         MouseLeftButtonDown += OnMouseLeftButtonDown;
         MouseMove += OnMouseMove;
@@ -77,7 +96,7 @@ public partial class LyricsWindow : Window
         MouseRightButtonUp += OnMouseRightButtonUp;
         MouseWheel += OnMouseWheel;
 
-        ShowStatus("等待 QQ 音乐播放…");
+        SetStatus(string.Empty);
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)
@@ -96,34 +115,22 @@ public partial class LyricsWindow : Window
         Opacity = _settings.WindowOpacity;
         Topmost = true;
 
-        CurrentLine.FontSize = _settings.FontSize;
-        double neighbor = Math.Max(12, _settings.FontSize * _settings.NeighborFontScale);
-        PrevLine.FontSize = neighbor;
-        NextLine.FontSize = neighbor;
-        TranslationLine.FontSize = Math.Max(12, _settings.FontSize * 0.60);
-        StatusLine.FontSize = neighbor;
-
         Backdrop.Visibility = _settings.ShowBackdrop ? Visibility.Visible : Visibility.Collapsed;
         Backdrop.Opacity = _settings.BackdropOpacity;
-
-        Visibility neighborVisibility = _settings.ShowNeighborLines ? Visibility.Visible : Visibility.Collapsed;
-        PrevLine.Visibility = neighborVisibility;
-        NextLine.Visibility = neighborVisibility;
-
-        TranslationLine.Visibility = _settings.ShowTranslation && TranslationLine.Text.Length > 0
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
 
         if (_handle != IntPtr.Zero)
         {
             NativeMethods.SetClickThrough(_handle, _settings.ClickThrough);
         }
 
-        // 让"显示翻译/上下行"这类开关立刻反映到画面上
-        if (_lineIndex >= 0)
+        // 让字号、翻译开关这类改动立刻反映到画面上
+        if (_showingLyrics && _lineIndex >= 0)
         {
-            RenderCurrentLines(animate: false);
+            RenderCurrentLine(animate: false);
         }
+
+        UpdateVisibility();
     }
 
     private void RestorePosition()
@@ -142,9 +149,9 @@ public partial class LyricsWindow : Window
         }
         else
         {
-            // 首次运行：屏幕底部居中，高度上离任务栏留一点距离
+            // 首次运行：屏幕底部居中，离任务栏留一点距离
             Left = work.Left + (work.Width - Width) / 2.0;
-            Top = work.Bottom - Height - 120;
+            Top = work.Bottom - Height - 110;
         }
     }
 
@@ -170,6 +177,54 @@ public partial class LyricsWindow : Window
         _settings.Save();
     }
 
+    // ---------------- 显示 / 隐藏 ----------------
+
+    /// <summary>
+    /// 是否显示浮窗。只有"用户手动隐藏"或"QQ 音乐没有媒体会话"时才隐藏。
+    /// 暂停播放不会隐藏——暂停时会话仍然存在，歌词停在当前位置。
+    ///
+    /// 这里刻意对比窗口真实的 <see cref="UIElement.Visibility"/> 而不是自己维护一个布尔缓存：
+    /// 缓存标志一旦和真实状态失步（例如窗口尚未 Show 就被设成 Hidden），
+    /// 后面算出来"应该显示"时会被当成"状态没变"直接跳过，窗口就永远不出现了。
+    /// </summary>
+    private void UpdateVisibility()
+    {
+        if (!_ready) return; // 窗口还没 Show 过，先不要动
+
+        bool shouldHide = IsUserHidden || (_settings.HideWhenNoQqMusic && !_media.HasSession);
+        Visibility target = shouldHide ? Visibility.Hidden : Visibility.Visible;
+
+        if (Visibility != target)
+        {
+            Visibility = target;
+            Log.Info($"浮窗{(shouldHide ? "隐藏" : "显示")}（QQ 音乐会话：{(_media.HasSession ? "有" : "无")}）");
+
+            if (!shouldHide)
+            {
+                _lineIndex = -1; // 重新显示时强制重画
+            }
+        }
+    }
+
+    private void OnSessionAvailabilityChanged(object? sender, bool available)
+    {
+        // 事件来自后台线程
+        try
+        {
+            Dispatcher.Invoke(UpdateVisibility);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("响应会话变化失败: " + ex.Message);
+        }
+    }
+
+    public void ToggleUserVisibility()
+    {
+        IsUserHidden = !IsUserHidden;
+        UpdateVisibility();
+    }
+
     // ---------------- 歌词渲染 ----------------
 
     public void SetLyrics(ResolvedLyrics lyrics)
@@ -179,30 +234,42 @@ public partial class LyricsWindow : Window
 
         if (lyrics.Found && lyrics.Lines.Count > 0)
         {
-            _transientStatus = string.Empty;
-            LyricsPanel.Visibility = Visibility.Visible;
+            _showingLyrics = true;
+            ContentPanel.Visibility = Visibility.Visible;
             StatusLine.Visibility = Visibility.Collapsed;
 
-            // 立即画一次，避免等到下一帧才出现
             _lineIndex = FindLineIndex(CurrentPosition());
-            RenderCurrentLines(animate: false);
+            RenderCurrentLine(animate: false);
         }
         else
         {
-            LyricsPanel.Visibility = Visibility.Collapsed;
-            StatusLine.Visibility = Visibility.Visible;
-            ShowStatus(_media.Current.IsEmpty
-                ? "等待 QQ 音乐播放…"
-                : $"{_media.Current.DisplayName}\n未找到歌词");
+            // 没匹配到歌词时至少把歌名显示出来，方便判断是不是匹配错了
+            SetStatus(_media.Current.DisplayName);
         }
+
+        UpdateVisibility();
     }
 
-    public void ShowStatus(string text)
+    /// <summary>显示兜底/临时文字（小字）。传空字符串表示整块内容留空。</summary>
+    public void SetStatus(string text)
     {
-        _transientStatus = text;
-        StatusLine.Text = text;
-        StatusLine.Visibility = Visibility.Visible;
-        LyricsPanel.Visibility = Visibility.Collapsed;
+        _showingLyrics = false;
+        ContentPanel.Visibility = Visibility.Collapsed;
+        _lineIndex = -1;
+
+        if (string.IsNullOrEmpty(text))
+        {
+            StatusLine.Text = string.Empty;
+            StatusLine.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            StatusLine.Text = text;
+            StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
+            StatusLine.Visibility = Visibility.Visible;
+        }
+
+        UpdateVisibility();
     }
 
     private TimeSpan CurrentPosition()
@@ -213,16 +280,15 @@ public partial class LyricsWindow : Window
 
     private void OnTick(object? sender, EventArgs e)
     {
-        UpdateIdleVisibility();
-
-        if (_lyrics.Lines.Count == 0) return;
-        if (LyricsPanel.Visibility != Visibility.Visible) return;
+        UpdateVisibility();
+        if (Visibility != Visibility.Visible) return;
+        if (!_showingLyrics || _lyrics.Lines.Count == 0) return;
 
         int index = FindLineIndex(CurrentPosition());
         if (index != _lineIndex)
         {
             _lineIndex = index;
-            RenderCurrentLines(animate: true);
+            RenderCurrentLine(animate: true);
         }
     }
 
@@ -249,21 +315,23 @@ public partial class LyricsWindow : Window
         return result;
     }
 
-    private void RenderCurrentLines(bool animate)
+    private void RenderCurrentLine(bool animate)
     {
         var lines = _lyrics.Lines;
         int index = _lineIndex;
         if (index < 0 || index >= lines.Count) return;
 
-        PrevLine.Text = _settings.ShowNeighborLines && index > 0 ? lines[index - 1].Text : string.Empty;
-        NextLine.Text = _settings.ShowNeighborLines && index + 1 < lines.Count ? lines[index + 1].Text : string.Empty;
-
         LyricLine current = lines[index];
         CurrentLine.Text = current.Text;
+        FitCurrentLineToWidth();
 
         bool showTranslation = _settings.ShowTranslation && current.HasTranslation;
         TranslationLine.Text = showTranslation ? current.Translation! : string.Empty;
         TranslationLine.Visibility = showTranslation ? Visibility.Visible : Visibility.Collapsed;
+        if (showTranslation)
+        {
+            TranslationLine.FontSize = Math.Max(MinAutoFontSize - 1, CurrentLine.FontSize * 0.52);
+        }
 
         if (animate)
         {
@@ -271,42 +339,61 @@ public partial class LyricsWindow : Window
         }
     }
 
-    /// <summary>换行时的淡入 + 轻微上移，避免歌词"啪"地跳变。</summary>
+    /// <summary>
+    /// 把当前行缩到能塞进窗口宽度。单行浮窗不能让长句换行或溢出，
+    /// 所以按实测文本宽度等比缩小字号，缩到下限还超长就交给省略号。
+    /// </summary>
+    private void FitCurrentLineToWidth()
+    {
+        double configured = _settings.FontSize;
+        string text = CurrentLine.Text;
+
+        if (string.IsNullOrEmpty(text))
+        {
+            CurrentLine.FontSize = configured;
+            return;
+        }
+
+        double windowWidth = ActualWidth > 0 ? ActualWidth : Width;
+        double available = Math.Max(40, windowWidth - LineSidePadding * 2);
+        double size = configured;
+
+        double measured = MeasureTextWidth(text, size);
+        if (measured > available)
+        {
+            size = Math.Max(MinAutoFontSize, size * (available / measured));
+        }
+
+        CurrentLine.FontSize = size;
+    }
+
+    private double MeasureTextWidth(string text, double fontSize)
+    {
+        var typeface = new Typeface(
+            CurrentLine.FontFamily, CurrentLine.FontStyle, CurrentLine.FontWeight, CurrentLine.FontStretch);
+
+        var formatted = new FormattedText(
+            text,
+            CultureInfo.CurrentUICulture,
+            FlowDirection.LeftToRight,
+            typeface,
+            fontSize,
+            Brushes.White,
+            VisualTreeHelper.GetDpi(this).PixelsPerDip);
+
+        return formatted.WidthIncludingTrailingWhitespace;
+    }
+
+    /// <summary>换行时的短淡入 + 轻微上移。只切一行，不做滚动。</summary>
     private void AnimateLineChange()
     {
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
 
-        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(240)) { EasingFunction = ease };
-        var slide = new DoubleAnimation(14, 0, TimeSpan.FromMilliseconds(280)) { EasingFunction = ease };
+        var fade = new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(150)) { EasingFunction = ease };
+        var slide = new DoubleAnimation(8, 0, TimeSpan.FromMilliseconds(170)) { EasingFunction = ease };
 
         CurrentLine.BeginAnimation(OpacityProperty, fade);
-        CurrentLineOffset.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, slide);
-    }
-
-    private void UpdateIdleVisibility()
-    {
-        bool idle = !_media.HasSession;
-        bool shouldHide = IsUserHidden
-                          || (_settings.HideWhenIdle && idle && DateTime.Now > _startupGraceUntil);
-
-        if (shouldHide == _idleHidden) return;
-        _idleHidden = shouldHide;
-        Visibility = shouldHide ? Visibility.Hidden : Visibility.Visible;
-    }
-
-    public void ToggleUserVisibility()
-    {
-        IsUserHidden = !IsUserHidden;
-        if (!IsUserHidden)
-        {
-            Visibility = Visibility.Visible;
-            _idleHidden = false;
-        }
-        else
-        {
-            Visibility = Visibility.Hidden;
-            _idleHidden = true;
-        }
+        CurrentLineOffset.BeginAnimation(TranslateTransform.YProperty, slide);
     }
 
     // ---------------- 鼠标交互 ----------------
@@ -380,7 +467,7 @@ public partial class LyricsWindow : Window
         if (!CanInteract) return;
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
 
-        _settings.FontSize = Math.Min(120, Math.Max(14, _settings.FontSize + (e.Delta > 0 ? 2 : -2)));
+        _settings.FontSize = Math.Min(120, Math.Max(12, _settings.FontSize + (e.Delta > 0 ? 2 : -2)));
         ApplySettings();
         SettingsChanged?.Invoke(this, EventArgs.Empty);
         e.Handled = true;
