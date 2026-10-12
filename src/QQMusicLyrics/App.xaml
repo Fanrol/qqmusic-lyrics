@@ -1,0 +1,8 @@
+<Application x:Class="QQMusicLyrics.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <!-- 说明：本项目刻意不使用系统主题，浮窗需要完全透明的自绘外观 -->
+    </Application.Resources>
+</Application>
