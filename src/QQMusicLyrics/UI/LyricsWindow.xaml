@@ -19,6 +19,8 @@
             <!-- 固定高度：按钮出现/消失时歌词不会上下跳 -->
             <RowDefinition Height="30" />
             <RowDefinition Height="*" />
+            <!-- 进度条所在行 -->
+            <RowDefinition Height="12" />
         </Grid.RowDefinitions>
 
         <!--
@@ -145,6 +147,51 @@
                 </TextBlock.Effect>
             </TextBlock>
         </StackPanel>
+
+        <!--
+            歌曲进度条：很细的一条长条，已播放部分是实心白，未播放部分只留白色描边。
+            填充与未填充的交界处有一个白色光点（径向渐变光晕 + 呼吸脉动），做出"焊接"的感觉。
+            宽度与它上面的框一致（480），高度 4。
+        -->
+        <Canvas x:Name="ProgressHost"
+                Grid.Row="2"
+                Width="480"
+                Height="12"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center">
+
+            <Border x:Name="ProgressTrack"
+                    Canvas.Left="0" Canvas.Top="4"
+                    Width="480" Height="4"
+                    BorderBrush="White" BorderThickness="1"
+                    Background="Transparent" />
+
+            <Rectangle x:Name="ProgressFill"
+                       Canvas.Left="1" Canvas.Top="5"
+                       Width="0" Height="2"
+                       Fill="White" />
+
+            <!-- 交界处的光晕：中间亮、边缘透明，避免变成一个实心白球 -->
+            <Ellipse x:Name="ProgressGlow"
+                     Canvas.Left="-8" Canvas.Top="-2"
+                     Width="16" Height="16"
+                     IsHitTestVisible="False">
+                <Ellipse.Fill>
+                    <RadialGradientBrush>
+                        <GradientStop Color="#FFFFFFFF" Offset="0" />
+                        <GradientStop Color="#66FFFFFF" Offset="0.38" />
+                        <GradientStop Color="#00FFFFFF" Offset="1" />
+                    </RadialGradientBrush>
+                </Ellipse.Fill>
+            </Ellipse>
+
+            <!-- 光点核心 -->
+            <Ellipse x:Name="ProgressSpark"
+                     Canvas.Left="-1.5" Canvas.Top="4.5"
+                     Width="3" Height="3"
+                     Fill="White"
+                     IsHitTestVisible="False" />
+        </Canvas>
 
         <!--
             兜底文字：歌词没搜到时显示 "Playing: 歌名 - 歌手"。

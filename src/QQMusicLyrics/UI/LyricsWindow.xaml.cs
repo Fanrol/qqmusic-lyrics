@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -80,6 +81,12 @@ public partial class LyricsWindow : Window
     private int _centerAnchorPhysical;
     private bool _centerAnchorReady;
 
+    /// <summary>ticker 计数：用来周期性重申置顶。</summary>
+    private int _tickCount;
+
+    /// <summary>上一次进度条填充到的整像素位置，变化不大就不重设布局。</summary>
+    private int _lastProgressPixels = -1;
+
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
 
@@ -133,6 +140,14 @@ public partial class LyricsWindow : Window
         PlusButton.MouseLeftButtonDown += (_, e) => { e.Handled = true; AdjustFontSize(+2); };
         MinusButton.MouseLeftButtonDown += (_, e) => { e.Handled = true; AdjustFontSize(-2); };
 
+        // 进度条交界处光点的"呼吸"：很轻的明暗脉动，做出焊接似的感觉
+        ProgressGlow.BeginAnimation(OpacityProperty, new DoubleAnimation(0.45, 1.0, TimeSpan.FromMilliseconds(650))
+        {
+            AutoReverse = true,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+        });
+
         SetStatus(string.Empty);
     }
 
@@ -150,12 +165,16 @@ public partial class LyricsWindow : Window
         Height = _settings.Height;
         Opacity = _settings.WindowOpacity;
         Topmost = true;
+        NativeMethods.RaiseToTopMost(_handle);
 
         StatusLine.FontSize = _settings.FontSize;
 
         // "框"的宽度永远取设置里的基础宽度（默认 480），不随歌词变宽而改变；
         // 以后加进来的内容都挂在这个框里，坐标系是稳定的。
         BoxContainer.Width = _settings.Width;
+        ProgressHost.Width = _settings.Width;
+        ProgressTrack.Width = _settings.Width;
+        _lastProgressPixels = -1; // 宽度变了，进度条要重算
 
         UpdateLockAppearance();
         UpdateClickThrough();
@@ -448,7 +467,15 @@ public partial class LyricsWindow : Window
         UpdateVisibility();
         if (Visibility != Visibility.Visible) return;
 
+        // 每约 0.5 秒重申一次置顶：置顶是一整层，别的置顶窗口一被激活就会跑到前面
+        if (++_tickCount >= 15)
+        {
+            _tickCount = 0;
+            NativeMethods.RaiseToTopMost(_handle);
+        }
+
         UpdateButtonBarHover();
+        UpdateProgressBar();
 
         if (!_showingLyrics || _lyrics.Lines.Count == 0) return;
 
@@ -458,6 +485,39 @@ public partial class LyricsWindow : Window
             _lineIndex = index;
             RenderCurrentLine(animate: true);
         }
+    }
+
+    /// <summary>
+    /// 更新歌曲进度条：已播放部分实心白，未播放部分只有 1px 白色描边，
+    /// 交界处放光点（光点位置随进度走）。
+    /// </summary>
+    private void UpdateProgressBar()
+    {
+        TimeSpan duration = _media.Duration;
+        if (!_media.HasSession || duration <= TimeSpan.Zero)
+        {
+            ProgressHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        ProgressHost.Visibility = Visibility.Visible;
+
+        double ratio = _media.CurrentPosition.TotalMilliseconds / duration.TotalMilliseconds;
+        if (ratio < 0) ratio = 0;
+        else if (ratio > 1) ratio = 1;
+
+        // 条宽 = 框宽；左右各 1px 是描边，填充只画在内侧
+        double inner = Math.Max(0, _settings.Width - 2);
+        double filled = inner * ratio;
+
+        // 位置没变到 1 像素就不动布局，省得 30fps 一直触发布局
+        int rounded = (int)Math.Round(filled);
+        if (rounded == _lastProgressPixels) return;
+        _lastProgressPixels = rounded;
+
+        ProgressFill.Width = filled;
+        Canvas.SetLeft(ProgressGlow, 1 + filled - ProgressGlow.Width / 2);
+        Canvas.SetLeft(ProgressSpark, 1 + filled - ProgressSpark.Width / 2);
     }
 
     /// <summary>二分找"最后一条时间 &lt;= 当前位置"的歌词行。</summary>
