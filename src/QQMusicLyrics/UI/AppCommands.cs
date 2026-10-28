@@ -5,7 +5,7 @@ namespace QQMusicLyrics.UI;
 
 /// <summary>
 /// 托盘菜单与浮窗右键菜单共用的命令集：两处入口调同一套方法，行为不会不一致。
-/// 目前只有"显示 / 隐藏 / 锁定 / 退出"四项，其它能力等后续逐步加回。
+/// 目前只有"显示 / 隐藏 / 锁定 / 字号加减 / 退出"，其它能力等后续逐步加回。
 /// </summary>
 public sealed class AppCommands
 {
@@ -41,7 +41,7 @@ public sealed class AppCommands
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    /// <summary>切换锁定。锁定 = 同时开启鼠标穿透；解锁 = 取消穿透。</summary>
+    /// <summary>切换锁定。锁定 = 整窗鼠标穿透（锁图标本身除外）；解锁 = 取消穿透。</summary>
     public void ToggleLocked()
     {
         _settings.Locked = !_settings.Locked;
@@ -52,6 +52,10 @@ public sealed class AppCommands
             : "已解锁：关闭鼠标穿透");
         StateChanged?.Invoke(this, EventArgs.Empty);
     }
+
+    public void IncreaseFont() => _window.AdjustFontSize(+2);
+
+    public void DecreaseFont() => _window.AdjustFontSize(-2);
 
     public void Exit() => _exit();
 }

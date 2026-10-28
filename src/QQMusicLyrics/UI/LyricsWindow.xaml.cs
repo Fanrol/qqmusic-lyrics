@@ -16,25 +16,39 @@ namespace QQMusicLyrics.UI;
 
 /// <summary>
 /// 浮窗本体：无边框 + 完全透明 + 置顶 + 不出现在 Alt+Tab/任务栏。
-/// 默认只有一行歌词，换行时直接切换（不滚动、不显示上下句），没有任何背景板。
 ///
-/// 显示规则：只有存在 QQ 音乐媒体会话时才显示。浏览器放 B 站视频同样会产生
-/// SMTC 会话，但采集层只认 QQMusic.exe，所以这里 HasSession 为 false 时浮窗完全隐藏。
+/// 歌词是**恒定字号**、单行、不换行、不省略：一行太长时窗口会向左右两侧撑开
+/// （文字始终以原中心居中），所以长句会"凸出"480 的基础框，而不是被压缩或换行。
 ///
-/// 锁定语义：锁定 = 同时开启鼠标穿透。因此锁定后浮窗收不到任何鼠标事件，
-/// 解锁只能通过托盘菜单；浮窗上的锁定键只在未锁定状态下可点。
+/// 锁定语义：锁定 = 鼠标穿透，但**锁图标那一小块会临时取消穿透**，
+/// 所以锁定状态下也能点图标解锁（与 QQ 音乐自带歌词的行为一致）。
 /// 悬停判定不依赖窗口事件（穿透时收不到），而是轮询光标位置。
 /// </summary>
 public partial class LyricsWindow : Window
 {
-    /// <summary>歌词左右留白（要与 XAML 里 ContentPanel 的 Margin 保持一致），用于计算可用宽度。</summary>
+    /// <summary>歌词左右留白（与 XAML 里 ContentPanel 的 Margin 一致）。</summary>
     private const double LineSidePadding = 16;
 
-    /// <summary>自动缩字的下限，再长就交给省略号。</summary>
-    private const double MinAutoFontSize = 12;
+    /// <summary>字号下限，再小就没法读了。</summary>
+    private const double MinFontSize = 12;
 
-    /// <summary>鼠标离开浮窗多久后隐藏锁定键。</summary>
-    private static readonly TimeSpan LockButtonHideDelay = TimeSpan.FromSeconds(2);
+    /// <summary>字号上限（与托盘/滚轮一致）。</summary>
+    private const double MaxFontSize = 120;
+
+    /// <summary>鼠标离开浮窗多久后隐藏按钮栏。</summary>
+    private static readonly TimeSpan ButtonBarHideDelay = TimeSpan.FromSeconds(1);
+
+    // 三个按钮的布局：锁定 · 加号 · 减号，整组居中
+    private const double ButtonSize = 24;
+    private const double GapLockToPlus = 14;
+    private const double GapPlusToMinus = 6;
+
+    /// <summary>整组按钮的宽度 = 24*3 + 14 + 6 = 92。</summary>
+    private const double ButtonGroupWidth = ButtonSize * 3 + GapLockToPlus + GapPlusToMinus;
+
+    /// <summary>锁图标点击区的判定范围（比图标本身大一圈，避免"移过去的一瞬间还没取消穿透"）。</summary>
+    private const double LockZoneHalfWidth = 20;
+    private const double LockZoneBottom = 38;
 
     private readonly SmtcMediaService _media;
     private readonly AppSettings _settings;
@@ -54,22 +68,19 @@ public partial class LyricsWindow : Window
     private double _dragOriginLeft;
     private double _dragOriginTop;
 
-    // 锁定键的悬停状态
+    // 按钮栏的悬停状态
     private bool _cursorInside;
-    private bool _lockButtonShown;
+    private bool _buttonBarShown;
     private DateTime _cursorLeftAt = DateTime.UtcNow;
 
-    /// <summary>光标是否落在锁定键的点击区内（只有这块区域在锁定时不穿透）。</summary>
+    /// <summary>光标是否落在锁图标的点击区内（只有这块区域在锁定时不穿透）。</summary>
     private bool _cursorOverLockZone;
 
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
 
-    /// <summary>用户点了浮窗上的锁定键。</summary>
+    /// <summary>用户点了浮窗上的锁图标。</summary>
     public event EventHandler? LockToggleRequested;
-
-    /// <summary>通过滚轮等方式改了设置，通知外层持久化。</summary>
-    public event EventHandler? SettingsChanged;
 
     public bool IsUserHidden { get; private set; }
 
@@ -90,7 +101,7 @@ public partial class LyricsWindow : Window
 
         _ticker = new DispatcherTimer(DispatcherPriority.Render)
         {
-            Interval = TimeSpan.FromMilliseconds(33), // ~30fps，用于换行判断与锁定键悬停检测
+            Interval = TimeSpan.FromMilliseconds(33), // ~30fps，用于换行判断与按钮栏悬停检测
         };
         _ticker.Tick += OnTick;
 
@@ -113,7 +124,9 @@ public partial class LyricsWindow : Window
         MouseRightButtonUp += OnMouseRightButtonUp;
         MouseWheel += OnMouseWheel;
 
-        LockButton.MouseLeftButtonDown += OnLockButtonClick;
+        LockButton.MouseLeftButtonDown += (_, e) => { e.Handled = true; LockToggleRequested?.Invoke(this, EventArgs.Empty); };
+        PlusButton.MouseLeftButtonDown += (_, e) => { e.Handled = true; AdjustFontSize(+2); };
+        MinusButton.MouseLeftButtonDown += (_, e) => { e.Handled = true; AdjustFontSize(-2); };
 
         SetStatus(string.Empty);
     }
@@ -129,32 +142,53 @@ public partial class LyricsWindow : Window
 
     public void ApplySettings()
     {
-        Width = _settings.Width;
         Height = _settings.Height;
         Opacity = _settings.WindowOpacity;
         Topmost = true;
 
-        StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
+        StatusLine.FontSize = Math.Max(MinFontSize, _settings.FontSize * 0.62);
 
         UpdateLockAppearance();
         UpdateClickThrough();
 
-        // 让字号、翻译开关这类改动立刻反映到画面上
+        // 让字号、翻译开关这类改动立刻反映到画面上，并重新计算窗口宽度
         if (_showingLyrics && _lineIndex >= 0)
         {
             RenderCurrentLine(animate: false);
+        }
+        else if (StatusLine.Visibility == Visibility.Visible)
+        {
+            LayoutWindowWidth(StatusLine.Text, StatusLine.FontSize);
+        }
+        else
+        {
+            LayoutWindowWidth(null, _settings.FontSize);
         }
 
         UpdateVisibility();
     }
 
+    /// <summary>根据锁定状态切换锁图标形态；加减号只在未锁定（A 状态）出现。</summary>
+    private void UpdateLockAppearance()
+    {
+        bool locked = _settings.Locked;
+
+        LockShackleClosed.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
+        LockShackleOpen.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+
+        // 用 Hidden 而不是 Collapsed：Hidden 仍占位，锁图标的位置就不会随状态左右跳
+        Visibility editVisibility = locked ? Visibility.Hidden : Visibility.Visible;
+        PlusButton.Visibility = editVisibility;
+        MinusButton.Visibility = editVisibility;
+    }
+
     /// <summary>
-    /// 鼠标穿透只作用于"除锁定键以外"的区域。
+    /// 鼠标穿透只作用于"除锁图标以外"的区域。
     ///
     /// WS_EX_TRANSPARENT 是整窗级别的，没法只对一部分生效，所以这里按光标位置动态切换：
-    ///   - 未锁定：整窗可交互（能拖动、能右键）
-    ///   - 锁定 + 光标不在锁定键上：整窗穿透
-    ///   - 锁定 + 光标移到锁定键的点击区：临时取消穿透，让点击能落到图标上（点它可以解锁）
+    ///   - 未锁定：整窗可交互（能拖动、能右键、能点加减号）
+    ///   - 锁定 + 光标不在锁图标上：整窗穿透
+    ///   - 锁定 + 光标移到锁图标的点击区：临时取消穿透，让点击能落到图标上（点它可以解锁）
     /// 判定用轮询而不是鼠标事件，因为穿透时窗口根本收不到事件。
     /// </summary>
     private void UpdateClickThrough()
@@ -165,22 +199,13 @@ public partial class LyricsWindow : Window
         NativeMethods.SetClickThrough(_handle, clickThrough);
     }
 
-    /// <summary>锁定键的点击区：比图标本身大一圈，留出余量，避免"移过去的一瞬间还没取消穿透"。</summary>
+    /// <summary>锁图标在窗口内的水平中心：整组按钮居中后，锁在最左边。</summary>
+    private double LockCenterX => Width / 2.0 - ButtonGroupWidth / 2.0 + ButtonSize / 2.0;
+
     private bool IsInLockZone(double localX, double localY)
     {
-        const double halfWidth = 20;     // 图标宽 24，左右各多留 8
-        const double zoneBottom = 38;    // 图标上下 6..30，再留一点余量
-
-        return Math.Abs(localX - Width / 2.0) <= halfWidth &&
-               localY >= 0 && localY <= zoneBottom;
-    }
-
-    /// <summary>根据锁定状态切换锁图标：未锁定显示开着的锁，锁定显示关着的锁。</summary>
-    private void UpdateLockAppearance()
-    {
-        bool locked = _settings.Locked;
-        LockShackleClosed.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
-        LockShackleOpen.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+        return Math.Abs(localX - LockCenterX) <= LockZoneHalfWidth &&
+               localY >= 0 && localY <= LockZoneBottom;
     }
 
     private void RestorePosition()
@@ -220,10 +245,12 @@ public partial class LyricsWindow : Window
     private void SaveBounds()
     {
         if (double.IsNaN(Left) || double.IsNaN(Top)) return;
-        _settings.Left = Left;
+
+        // 窗口宽度会被长歌词撑大（Width 不再等于设置里的基础宽度），
+        // 所以这里存"基础框"的左边界，重启后长句仍围绕同一个中心展开。
+        double extra = Width - _settings.Width;
+        _settings.Left = Left + extra / 2.0;
         _settings.Top = Top;
-        _settings.Width = Width;
-        _settings.Height = Height;
         _settings.Save();
     }
 
@@ -286,20 +313,27 @@ public partial class LyricsWindow : Window
         }
     }
 
-    // ---------------- 锁定键 ----------------
+    // ---------------- 字号 ----------------
 
-    private void OnLockButtonClick(object sender, MouseButtonEventArgs e)
+    /// <summary>加减号按钮与菜单共用：调整歌词字号并立刻重新排版。</summary>
+    public void AdjustFontSize(double delta)
     {
-        // 标记已处理，避免同时触发窗口拖动
-        e.Handled = true;
-        LockToggleRequested?.Invoke(this, EventArgs.Empty);
+        double next = Math.Min(MaxFontSize, Math.Max(MinFontSize, _settings.FontSize + delta));
+        if (Math.Abs(next - _settings.FontSize) < 0.01) return;
+
+        _settings.FontSize = next;
+        _settings.Save();
+        ApplySettings();
+        Log.Info($"字号调整为 {next:0}");
     }
+
+    // ---------------- 按钮栏（锁定 / 加 / 减）----------------
 
     /// <summary>
     /// 轮询光标位置判断是否悬停在浮窗上。
     /// 不能用 MouseEnter/MouseLeave：锁定后窗口是穿透的，收不到任何鼠标事件。
     /// </summary>
-    private void UpdateLockButtonHover()
+    private void UpdateButtonBarHover()
     {
         if (!TryGetMousePositionInDip(out Point cursor)) return;
 
@@ -307,7 +341,7 @@ public partial class LyricsWindow : Window
         double localY = cursor.Y - Top;
         bool inside = localX >= 0 && localX <= Width && localY >= 0 && localY <= Height;
 
-        // 锁定键的点击区是否被光标覆盖 —— 决定这一小块要不要取消穿透
+        // 锁图标的点击区是否被光标覆盖 —— 决定这一小块要不要取消穿透
         bool overLockZone = inside && IsInLockZone(localX, localY);
         if (overLockZone != _cursorOverLockZone)
         {
@@ -318,7 +352,7 @@ public partial class LyricsWindow : Window
         if (inside)
         {
             _cursorInside = true;
-            if (!_lockButtonShown) ShowLockButton(true);
+            if (!_buttonBarShown) ShowButtonBar(true);
             return;
         }
 
@@ -328,34 +362,21 @@ public partial class LyricsWindow : Window
             _cursorLeftAt = DateTime.UtcNow;
         }
 
-        if (_lockButtonShown && DateTime.UtcNow - _cursorLeftAt >= LockButtonHideDelay)
+        if (_buttonBarShown && DateTime.UtcNow - _cursorLeftAt >= ButtonBarHideDelay)
         {
-            ShowLockButton(false);
+            ShowButtonBar(false);
         }
     }
 
-    private void ShowLockButton(bool show)
+    private void ShowButtonBar(bool show)
     {
-        _lockButtonShown = show;
-        Log.Info($"锁定键{(show ? "显示" : "隐藏")}（鼠标{(show ? "进入" : "离开超过 2 秒")}浮窗）");
+        _buttonBarShown = show;
+        Log.Info($"浮窗按钮{(show ? "显示" : "隐藏")}（鼠标{(show ? "进入" : "离开超过 1 秒")}浮窗）");
 
-        if (show)
-        {
-            LockButton.Visibility = Visibility.Visible;
-            LockButton.BeginAnimation(OpacityProperty,
-                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)));
-            return;
-        }
-
-        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200));
-        fade.Completed += (_, _) =>
-        {
-            if (!_lockButtonShown) // 淡出过程中可能又被鼠标移入
-            {
-                LockButton.Visibility = Visibility.Collapsed;
-            }
-        };
-        LockButton.BeginAnimation(OpacityProperty, fade);
+        ButtonBar.BeginAnimation(OpacityProperty, new DoubleAnimation(
+            show ? 0 : 1,
+            show ? 1 : 0,
+            TimeSpan.FromMilliseconds(show ? 120 : 200)));
     }
 
     // ---------------- 歌词渲染 ----------------
@@ -394,12 +415,14 @@ public partial class LyricsWindow : Window
         {
             StatusLine.Text = string.Empty;
             StatusLine.Visibility = Visibility.Collapsed;
+            LayoutWindowWidth(null, _settings.FontSize);
         }
         else
         {
             StatusLine.Text = text;
-            StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
+            StatusLine.FontSize = Math.Max(MinFontSize, _settings.FontSize * 0.62);
             StatusLine.Visibility = Visibility.Visible;
+            LayoutWindowWidth(text, StatusLine.FontSize);
         }
 
         UpdateVisibility();
@@ -416,7 +439,7 @@ public partial class LyricsWindow : Window
         UpdateVisibility();
         if (Visibility != Visibility.Visible) return;
 
-        UpdateLockButtonHover();
+        UpdateButtonBarHover();
 
         if (!_showingLyrics || _lyrics.Lines.Count == 0) return;
 
@@ -458,15 +481,18 @@ public partial class LyricsWindow : Window
         if (index < 0 || index >= lines.Count) return;
 
         LyricLine current = lines[index];
+
+        // 恒定字号：不再按行缩放，长句交给窗口向两侧撑开
+        CurrentLine.FontSize = _settings.FontSize;
         CurrentLine.Text = current.Text;
-        FitCurrentLineToWidth();
+        LayoutWindowWidth(current.Text, _settings.FontSize);
 
         bool showTranslation = _settings.ShowTranslation && current.HasTranslation;
         TranslationLine.Text = showTranslation ? current.Translation! : string.Empty;
         TranslationLine.Visibility = showTranslation ? Visibility.Visible : Visibility.Collapsed;
         if (showTranslation)
         {
-            TranslationLine.FontSize = Math.Max(MinAutoFontSize - 1, CurrentLine.FontSize * 0.52);
+            TranslationLine.FontSize = Math.Max(MinFontSize - 1, _settings.FontSize * 0.52);
         }
 
         if (animate)
@@ -476,31 +502,32 @@ public partial class LyricsWindow : Window
     }
 
     /// <summary>
-    /// 把当前行缩到能塞进窗口宽度。单行浮窗不能让长句换行或溢出，
-    /// 所以按实测文本宽度等比缩小字号，缩到下限还超长就交给省略号。
+    /// 按文字实际宽度决定窗口宽度：基础宽度是设置里的 480，长句就向左右撑开，
+    /// 撑开时保持窗口中心不动（所以两侧是同时变宽的）。
     /// </summary>
-    private void FitCurrentLineToWidth()
+    private void LayoutWindowWidth(string? text, double fontSize)
     {
-        double configured = _settings.FontSize;
-        string text = CurrentLine.Text;
+        double measured = string.IsNullOrEmpty(text) ? 0 : MeasureTextWidth(text, fontSize);
+        double desired = Math.Max(_settings.Width, measured + LineSidePadding * 2);
 
-        if (string.IsNullOrEmpty(text))
-        {
-            CurrentLine.FontSize = configured;
-            return;
-        }
+        // 别撑出屏幕
+        double maxWidth = Math.Max(_settings.Width, SystemParameters.WorkArea.Width - 40);
+        desired = Math.Min(desired, maxWidth);
 
-        double windowWidth = ActualWidth > 0 ? ActualWidth : Width;
-        double available = Math.Max(40, windowWidth - LineSidePadding * 2);
-        double size = configured;
+        SetWindowWidth(desired);
+    }
 
-        double measured = MeasureTextWidth(text, size);
-        if (measured > available)
-        {
-            size = Math.Max(MinAutoFontSize, size * (available / measured));
-        }
+    private void SetWindowWidth(double newWidth)
+    {
+        if (Math.Abs(Width - newWidth) < 0.5) return;
 
-        CurrentLine.FontSize = size;
+        double center = Left + Width / 2.0;
+        Width = newWidth;
+
+        double desiredLeft = center - newWidth / 2.0;
+        double vLeft = SystemParameters.VirtualScreenLeft;
+        double vRight = vLeft + SystemParameters.VirtualScreenWidth;
+        Left = Math.Min(Math.Max(desiredLeft, vLeft), Math.Max(vLeft, vRight - newWidth));
     }
 
     private double MeasureTextWidth(string text, double fontSize)
@@ -614,9 +641,7 @@ public partial class LyricsWindow : Window
         if (!CanInteract) return;
         if ((Keyboard.Modifiers & ModifierKeys.Control) == 0) return;
 
-        _settings.FontSize = Math.Min(120, Math.Max(12, _settings.FontSize + (e.Delta > 0 ? 2 : -2)));
-        ApplySettings();
-        SettingsChanged?.Invoke(this, EventArgs.Empty);
+        AdjustFontSize(e.Delta > 0 ? +2 : -2);
         e.Handled = true;
     }
 }

@@ -10,15 +10,18 @@ namespace QQMusicLyrics.UI;
 /// <summary>
 /// 托盘图标与右键菜单。
 ///
-/// 浮窗常驻置顶，锁定后还会开启鼠标穿透，所以托盘是"永远够得着"的控制入口；
+/// 浮窗常驻置顶，锁定后还会整窗鼠标穿透，所以托盘是"永远够得着"的控制入口；
 /// 托盘菜单与浮窗右键菜单是同一个对象，保证两处完全一致。
 ///
-/// 菜单只有四项：显示 / 隐藏 / 锁定(解锁) / 退出。
+/// 菜单：显示 / 隐藏 / 锁定(解锁) / 字号 + / 字号 − / 退出。
 /// </summary>
 public sealed class TrayIcon : IDisposable
 {
     /// <summary>菜单项上下留白，让行距松一点。</summary>
     private static readonly Padding ItemPadding = new(2, 7, 2, 7);
+
+    /// <summary>菜单图标的绘制颜色（菜单是浅色底）。</summary>
+    private static readonly Color MenuGlyphColor = Color.FromArgb(60, 60, 60);
 
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
@@ -28,23 +31,28 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _showItem = new("显示");
     private readonly ToolStripMenuItem _hideItem = new("隐藏");
     private readonly ToolStripMenuItem _lockItem = new("锁定");
+    private readonly ToolStripMenuItem _fontPlusItem = new("字号 +");
+    private readonly ToolStripMenuItem _fontMinusItem = new("字号 −");
     private readonly ToolStripMenuItem _exitItem = new("退出");
 
     private readonly Bitmap _lockOpenImage;
     private readonly Bitmap _lockClosedImage;
+    private readonly Bitmap _plusImage;
+    private readonly Bitmap _minusImage;
 
     public TrayIcon(AppCommands commands)
     {
         _commands = commands;
         _icon = CreateIcon();
 
-        // 菜单里那张锁图标用深色描边（菜单是浅色底），和浮窗上的白色版本同一套形状
-        _lockOpenImage = LockGlyph.CreateMenuBitmap(locked: false, color: Color.FromArgb(60, 60, 60), size: 32);
-        _lockClosedImage = LockGlyph.CreateMenuBitmap(locked: true, color: Color.FromArgb(60, 60, 60), size: 32);
+        _lockOpenImage = Glyphs.CreateLockBitmap(locked: false, MenuGlyphColor, 32);
+        _lockClosedImage = Glyphs.CreateLockBitmap(locked: true, MenuGlyphColor, 32);
+        _plusImage = Glyphs.CreatePlusBitmap(MenuGlyphColor, 32);
+        _minusImage = Glyphs.CreateMinusBitmap(MenuGlyphColor, 32);
 
         _menu = new ContextMenuStrip
         {
-            ShowImageMargin = true, // 给锁定项左边的图标留出位置
+            ShowImageMargin = true, // 给左侧图标留出位置
             Font = new Font("Microsoft YaHei UI", 9f),
             ImageScalingSize = new Size(16, 16),
         };
@@ -67,16 +75,25 @@ public sealed class TrayIcon : IDisposable
         _showItem.Padding = ItemPadding;
         _hideItem.Padding = ItemPadding;
         _lockItem.Padding = ItemPadding;
+        _fontPlusItem.Padding = ItemPadding;
+        _fontMinusItem.Padding = ItemPadding;
         _exitItem.Padding = ItemPadding;
 
         _showItem.Click += (_, _) => _commands.ShowWindow();
         _hideItem.Click += (_, _) => _commands.HideWindow();
         _lockItem.Click += (_, _) => _commands.ToggleLocked();
+        _fontPlusItem.Click += (_, _) => _commands.IncreaseFont();
+        _fontMinusItem.Click += (_, _) => _commands.DecreaseFont();
         _exitItem.Click += (_, _) => _commands.Exit();
+
+        _fontPlusItem.Image = _plusImage;
+        _fontMinusItem.Image = _minusImage;
 
         _menu.Items.Add(_showItem);
         _menu.Items.Add(_hideItem);
         _menu.Items.Add(_lockItem);
+        _menu.Items.Add(_fontPlusItem);
+        _menu.Items.Add(_fontMinusItem);
         _menu.Items.Add(new ToolStripSeparator());
         _menu.Items.Add(_exitItem);
 
@@ -166,5 +183,7 @@ public sealed class TrayIcon : IDisposable
         _icon.Dispose();
         _lockOpenImage.Dispose();
         _lockClosedImage.Dispose();
+        _plusImage.Dispose();
+        _minusImage.Dispose();
     }
 }

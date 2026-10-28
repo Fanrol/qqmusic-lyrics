@@ -70,8 +70,6 @@ public partial class App : Application
         // 浮窗上的锁定键与菜单里的"锁定/解锁"走同一条命令
         _window.LockToggleRequested += (_, _) => _commands.ToggleLocked();
 
-        _window.SettingsChanged += (_, _) => _settings.Save();
-
         _media.TrackChanged += OnTrackChanged;
 
         _window.Show();

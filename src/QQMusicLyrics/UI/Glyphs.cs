@@ -1,0 +1,106 @@
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
+
+namespace QQMusicLyrics.UI;
+
+/// <summary>
+/// 浮窗上的简约细线图标：锁 / 加号 / 减号。
+/// 菜单用 GDI+ 位图绘制，浮窗用 XAML 矢量 Path，两边共用同一套 24×24 设计坐标，保证观感一致。
+///
+/// 设计坐标（24×24）：
+///   锁体   矩形 (5,11)-(19,21)，圆角半径 2.5
+///   锁梁   从 (8.5,11) 竖直向上到 (8.5,7.5)，再以半径 3.5 从 180° 顺时针扫过
+///          关闭：扫 180° 到 (15.5,7.5)，右腿再落回 (15.5,11)
+///          开启：只扫 130° 到 (14.25,4.82)，右侧留出明显的缺口（小尺寸下也看得出是开着的）
+///   加减   中心 (12,13)，横线 (6,13)-(18,13)；加号另有竖线 (12,7)-(12,19)
+/// </summary>
+internal static class Glyphs
+{
+    /// <summary>菜单图标：锁。locked=true 画关着的锁。</summary>
+    public static Bitmap CreateLockBitmap(bool locked, Color color, int size)
+    {
+        var bitmap = NewBitmap(size);
+        using var graphics = Graphics.FromImage(bitmap);
+        Prepare(graphics);
+        using var pen = NewPen(color, size);
+
+        float scale = size / 24f;
+
+        using (var body = RoundedRectangle(5f * scale, 11f * scale, 14f * scale, 10f * scale, 2.5f * scale))
+        {
+            graphics.DrawPath(pen, body);
+        }
+
+        // 锁梁左腿
+        graphics.DrawLine(pen, 8.5f * scale, 11f * scale, 8.5f * scale, 7.5f * scale);
+
+        // 锁梁半圆：关闭扫 180°，开启只扫 130°（留大缺口）
+        float sweep = locked ? 180f : 130f;
+        graphics.DrawArc(pen,
+            (12f - 3.5f) * scale, (7.5f - 3.5f) * scale, 7f * scale, 7f * scale,
+            180f, sweep);
+
+        if (locked)
+        {
+            graphics.DrawLine(pen, 15.5f * scale, 7.5f * scale, 15.5f * scale, 11f * scale);
+        }
+
+        return bitmap;
+    }
+
+    /// <summary>菜单图标：加号。</summary>
+    public static Bitmap CreatePlusBitmap(Color color, int size)
+    {
+        var bitmap = NewBitmap(size);
+        using var graphics = Graphics.FromImage(bitmap);
+        Prepare(graphics);
+        using var pen = NewPen(color, size);
+
+        float scale = size / 24f;
+        graphics.DrawLine(pen, 6f * scale, 13f * scale, 18f * scale, 13f * scale);
+        graphics.DrawLine(pen, 12f * scale, 7f * scale, 12f * scale, 19f * scale);
+        return bitmap;
+    }
+
+    /// <summary>菜单图标：减号。</summary>
+    public static Bitmap CreateMinusBitmap(Color color, int size)
+    {
+        var bitmap = NewBitmap(size);
+        using var graphics = Graphics.FromImage(bitmap);
+        Prepare(graphics);
+        using var pen = NewPen(color, size);
+
+        float scale = size / 24f;
+        graphics.DrawLine(pen, 6f * scale, 13f * scale, 18f * scale, 13f * scale);
+        return bitmap;
+    }
+
+    private static Bitmap NewBitmap(int size) => new(size, size, PixelFormat.Format32bppArgb);
+
+    private static void Prepare(Graphics graphics)
+    {
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.Clear(Color.Transparent);
+    }
+
+    private static Pen NewPen(Color color, int size) => new(color, 2.0f * (size / 24f))
+    {
+        StartCap = LineCap.Round,
+        EndCap = LineCap.Round,
+        LineJoin = LineJoin.Round,
+    };
+
+    private static GraphicsPath RoundedRectangle(float x, float y, float width, float height, float radius)
+    {
+        float d = radius * 2;
+        var path = new GraphicsPath();
+        path.AddArc(x, y, d, d, 180, 90);
+        path.AddArc(x + width - d, y, d, d, 270, 90);
+        path.AddArc(x + width - d, y + height - d, d, d, 0, 90);
+        path.AddArc(x, y + height - d, d, d, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+}
