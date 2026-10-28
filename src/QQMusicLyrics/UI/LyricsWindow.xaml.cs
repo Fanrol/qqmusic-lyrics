@@ -47,6 +47,9 @@ public partial class LyricsWindow : Window
     /// <summary>整组按钮的宽度 = 24*3 + 14 + 6 = 92。</summary>
     private const double ButtonGroupWidth = ButtonSize * 3 + GapLockToPlus + GapPlusToMinus;
 
+    /// <summary>进度条宽度（居中）。比框的 480 窄一些，看着更像一条进度而不是分隔线。</summary>
+    private const double ProgressBarWidth = 240;
+
     /// <summary>锁图标点击区的判定范围（比图标本身大一圈，避免"移过去的一瞬间还没取消穿透"）。</summary>
     private const double LockZoneHalfWidth = 20;
     private const double LockZoneBottom = 38;
@@ -172,8 +175,8 @@ public partial class LyricsWindow : Window
         // "框"的宽度永远取设置里的基础宽度（默认 480），不随歌词变宽而改变；
         // 以后加进来的内容都挂在这个框里，坐标系是稳定的。
         BoxContainer.Width = _settings.Width;
-        ProgressHost.Width = _settings.Width;
-        ProgressTrack.Width = _settings.Width;
+        ProgressHost.Width = ProgressBarWidth;
+        ProgressTrack.Width = ProgressBarWidth;
         _lastProgressPixels = -1; // 宽度变了，进度条要重算
 
         UpdateLockAppearance();
@@ -506,8 +509,8 @@ public partial class LyricsWindow : Window
         if (ratio < 0) ratio = 0;
         else if (ratio > 1) ratio = 1;
 
-        // 条宽 = 框宽；左右各 1px 是描边，填充只画在内侧
-        double inner = Math.Max(0, _settings.Width - 2);
+        // 条宽固定 240；左右各 1px 是描边，填充只画在内侧
+        double inner = Math.Max(0, ProgressBarWidth - 2);
         double filled = inner * ratio;
 
         // 位置没变到 1 像素就不动布局，省得 30fps 一直触发布局
