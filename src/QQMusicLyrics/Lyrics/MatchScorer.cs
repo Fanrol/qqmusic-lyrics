@@ -15,10 +15,84 @@ namespace QQMusicLyrics.Lyrics;
 /// 注意阈值很松：歌名完全一致就能拿到 0.65，单靠这一项就过 0.50 的线。
 /// 也就是说**歌手完全不对也会被接受**（真实踩过的坑：Monster 被匹配成 BIGBANG 的韩语版）。
 /// 因此上层不能"第一条及格的就定案"，必须把所有关键词的候选合起来比一遍。
+///
+/// 另一个坑：**同名不同版本**。搜索接口返回的名字往往不带版本标记（"Daisy Crown"），
+/// 而真正的版本信息只在**歌曲详情**的 title 里（"Daisy Crown (日文版)"）。
+/// 所以带版本限定的曲目必须靠 <see cref="ExtractQualifiers"/> 在详情阶段再筛一次。
 /// </summary>
 public static class MatchScorer
 {
     private const double AcceptThreshold = 0.50;
+
+    /// <summary>标题里可能出现的版本/编曲限定。</summary>
+    public enum QualifierKind
+    {
+        English,
+        Japanese,
+        Chinese,
+        Korean,
+        Cantonese,
+        Instrumental,
+        Live,
+        Remix,
+        Acoustic,
+        Piano,
+        Karaoke,
+        Demo,
+        Cover,
+    }
+
+    /// <summary>括号内片段 → 限定类别的匹配表（小写、去空格后按 Contains 判断）。</summary>
+    private static readonly (string Pattern, QualifierKind Kind)[] QualifierPatterns =
+    {
+        ("英文版", QualifierKind.English),
+        ("英语版", QualifierKind.English),
+        ("英文", QualifierKind.English),
+        ("英语", QualifierKind.English),
+        ("english", QualifierKind.English),
+        ("日文版", QualifierKind.Japanese),
+        ("日语版", QualifierKind.Japanese),
+        ("日文", QualifierKind.Japanese),
+        ("日语", QualifierKind.Japanese),
+        ("japanese", QualifierKind.Japanese),
+        ("中文版", QualifierKind.Chinese),
+        ("国语版", QualifierKind.Chinese),
+        ("国语", QualifierKind.Chinese),
+        ("普通话", QualifierKind.Chinese),
+        ("chinese", QualifierKind.Chinese),
+        ("粤语", QualifierKind.Cantonese),
+        ("韩文", QualifierKind.Korean),
+        ("韩语", QualifierKind.Korean),
+        ("korean", QualifierKind.Korean),
+        ("伴奏", QualifierKind.Instrumental),
+        ("纯音乐", QualifierKind.Instrumental),
+        ("无人声", QualifierKind.Instrumental),
+        ("offvocal", QualifierKind.Instrumental),
+        ("instrumental", QualifierKind.Instrumental),
+        ("karaoke", QualifierKind.Karaoke),
+        ("卡拉ok", QualifierKind.Karaoke),
+        ("现场", QualifierKind.Live),
+        ("live", QualifierKind.Live),
+        ("remix", QualifierKind.Remix),
+        ("混音", QualifierKind.Remix),
+        ("acoustic", QualifierKind.Acoustic),
+        ("不插电", QualifierKind.Acoustic),
+        ("钢琴", QualifierKind.Piano),
+        ("piano", QualifierKind.Piano),
+        ("demo", QualifierKind.Demo),
+        ("翻唱", QualifierKind.Cover),
+        ("cover", QualifierKind.Cover),
+    };
+
+    /// <summary>一条候选的评分结果。</summary>
+    public readonly record struct ScoredCandidate(
+        SongCandidate Candidate, double Score, double TitleScore, double ArtistScore, int QualifierAffinity = 0)
+    {
+        public bool Accepted => Score >= AcceptThreshold && TitleScore >= 0.45;
+
+        /// <summary>版本关系：1 = 曲名里的版本标记与曲目一致，-1 = 冲突，0 = 无从判断。</summary>
+        public int Affinity => QualifierAffinity;
+    }
 
     /// <summary>一次评估的结果：选中的候选（不接受时为 null）与各分项得分，便于上层比较不同关键词的结果。</summary>
     public readonly record struct MatchResult(
@@ -30,16 +104,19 @@ public static class MatchScorer
     public static SongCandidate? Pick(TrackInfo track, IEnumerable<SongCandidate> candidates)
         => Evaluate(track, candidates).Candidate;
 
-    /// <summary>从候选里挑出最合适的一条，并返回各项得分（不接受时 Candidate 为 null）。</summary>
-    public static MatchResult Evaluate(TrackInfo track, IEnumerable<SongCandidate> candidates)
+    /// <summary>
+    /// 把所有候选按"版本关系 → 综合分"降序排好（**不做接受/拒绝过滤**，调用方自己决定用哪条）。
+    ///
+    /// 排序时先看版本关系：曲目带版本限定（英文版/伴奏/Live…）时，
+    /// 曲名里版本标记一致的那条优先于"没有标记"的，冲突的排到最后。
+    /// 全量搜索返回的 songname 带版本标记，所以这一步就能把日文版/中文版排除掉。
+    /// </summary>
+    public static List<ScoredCandidate> Rank(TrackInfo track, IEnumerable<SongCandidate> candidates)
     {
         var titleVariants = BuildTitleVariants(track.Title);
         var artists = SplitArtists(track.Artist);
-
-        SongCandidate? best = null;
-        double bestScore = 0;
-        double bestTitleScore = 0;
-        double bestArtistScore = 0;
+        var trackQualifiers = ExtractQualifiers(track.Title);
+        var scored = new List<ScoredCandidate>();
 
         foreach (var candidate in candidates)
         {
@@ -59,27 +136,96 @@ public static class MatchScorer
             double score = titleScore * 0.65 + artistScore * 0.35;
             if (titleScore >= 0.999 && artistScore >= 0.999) score = 1.0;
 
-            if (score > bestScore)
+            int affinity = 0;
+            if (trackQualifiers.Count > 0)
             {
-                bestScore = score;
-                best = candidate;
-                bestTitleScore = titleScore;
-                bestArtistScore = artistScore;
+                var candidateQualifiers = ExtractQualifiers(candidate.Name);
+                if (candidateQualifiers.Count > 0)
+                {
+                    affinity = trackQualifiers.Overlaps(candidateQualifiers) ? 1 : -1;
+                }
             }
+
+            scored.Add(new ScoredCandidate(candidate, score, titleScore, artistScore, affinity));
         }
 
-        if (best is null || bestScore < AcceptThreshold)
+        scored.Sort((a, b) =>
         {
-            return new MatchResult(null, bestScore, bestTitleScore, bestArtistScore);
-        }
+            int byAffinity = b.QualifierAffinity.CompareTo(a.QualifierAffinity);
+            return byAffinity != 0 ? byAffinity : b.Score.CompareTo(a.Score);
+        });
 
-        // 标题对不上却因为歌手相同而"混进来"的情况要挡掉
-        if (bestTitleScore < 0.45)
+        return scored;
+    }
+
+    /// <summary>从候选里挑出最合适的一条，并返回各项得分（不接受时 Candidate 为 null）。</summary>
+    public static MatchResult Evaluate(TrackInfo track, IEnumerable<SongCandidate> candidates)
+    {
+        var ranked = Rank(track, candidates);
+        if (ranked.Count == 0) return new MatchResult(null, 0, 0, 0);
+
+        ScoredCandidate top = ranked[0];
+        return top.Accepted
+            ? new MatchResult(top.Candidate, top.Score, top.TitleScore, top.ArtistScore)
+            : new MatchResult(null, top.Score, top.TitleScore, top.ArtistScore);
+    }
+
+    /// <summary>
+    /// 取出标题里**括号内**的版本限定。
+    /// 只看括号内是有意的：像 "Olivia" 里含 "live"、"Englishman" 里含 "english" 这类整词误判都能避免。
+    /// </summary>
+    public static HashSet<QualifierKind> ExtractQualifiers(string? title)
+    {
+        var result = new HashSet<QualifierKind>();
+        if (string.IsNullOrEmpty(title)) return result;
+
+        int depth = 0;
+        var segment = new StringBuilder();
+
+        foreach (char ch in title)
         {
-            return new MatchResult(null, bestScore, bestTitleScore, bestArtistScore);
+            if (ch is '(' or '（' or '[' or '【' or '〔' or '《')
+            {
+                depth++;
+                segment.Clear();
+                continue;
+            }
+
+            if (ch is ')' or '）' or ']' or '】' or '〕' or '》')
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                    CollectFromSegment(segment.ToString(), result);
+                    segment.Clear();
+                }
+                continue;
+            }
+
+            if (depth > 0) segment.Append(ch);
         }
 
-        return new MatchResult(best, bestScore, bestTitleScore, bestArtistScore);
+        return result;
+    }
+
+    private static void CollectFromSegment(string segment, HashSet<QualifierKind> result)
+    {
+        if (segment.Length == 0) return;
+
+        string lowered = segment.ToLowerInvariant().Replace(" ", string.Empty);
+        foreach (var (pattern, kind) in QualifierPatterns)
+        {
+            if (lowered.Contains(pattern, StringComparison.Ordinal)) result.Add(kind);
+        }
+    }
+
+    /// <summary>版本限定是否冲突：两边都有、且没有任何交集时算冲突（一边没有信息就不算）。</summary>
+    public static bool QualifiersConflict(
+        HashSet<QualifierKind> trackQualifiers, HashSet<QualifierKind> candidateQualifiers)
+    {
+        return trackQualifiers.Count > 0 &&
+               candidateQualifiers.Count > 0 &&
+               !trackQualifiers.Overlaps(candidateQualifiers);
     }
 
     /// <summary>把歌词缓存键/搜索关键词统一成"去掉括号补充说明"的主标题。</summary>

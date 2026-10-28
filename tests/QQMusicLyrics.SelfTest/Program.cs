@@ -31,6 +31,14 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
+
+        // 诊断用：只切换一次播放状态就退出（做对照测量前用它恢复播放）
+        if (args.Any(a => a.Equals("--toggle-play", StringComparison.OrdinalIgnoreCase)))
+        {
+            await TogglePlaybackAsync();
+            return 0;
+        }
+
         _testPlayback = args.Any(a => a.Equals("--test-playback", StringComparison.OrdinalIgnoreCase));
 
         int matchIndex = Array.FindIndex(args, a => a.Equals("--match", StringComparison.OrdinalIgnoreCase));
@@ -229,6 +237,62 @@ internal static class Program
         Check("Evaluate 给出可用于比较各关键词的综合分",
             MatchScorer.Evaluate(monsterTrack, monster).Score >= 0.99,
             MatchScorer.Evaluate(monsterTrack, monster).Score.ToString("0.000"));
+
+        // 回归：同名不同版本（英文版 / 日文版 / 中文版 / Remix）。
+        // 搜索接口返回的名字全都不带版本标记，所以只看名字时前三条都是 1.000 —— 必须靠详情标题来区分。
+        var daisy = new List<SongCandidate>
+        {
+            new("c1", "Daisy Crown", "鸣潮先约电台/Empty old City"),
+            new("c2", "Daisy Crown", "Empty old City"),
+            new("c3", "Daisy Crown", "鸣潮先约电台/芜桃/Empty old City/VISION SOUND"),
+            new("c4", "Daisy Crown", "鸣潮先约电台/Tuno/ariiol"),
+        };
+        var daisyTrack = new TrackInfo("Daisy Crown (英文版)", "鸣潮先约电台/Empty old City", "");
+        var rankedDaisy = MatchScorer.Rank(daisyTrack, daisy);
+        Check("同名不同版本时仅靠名字无法区分（前几条并列满分，必须看详情标题）",
+            rankedDaisy.Count >= 3 && rankedDaisy[0].Score >= 0.999 && rankedDaisy[2].Score >= 0.999,
+            string.Join(" / ", rankedDaisy.Select(r => r.Candidate.Singer + "=" + r.Score.ToString("0.000"))));
+
+        var trackQualifiers = MatchScorer.ExtractQualifiers(daisyTrack.Title);
+        var japaneseQualifiers = MatchScorer.ExtractQualifiers("Daisy Crown (日文版)");
+        var chineseQualifiers = MatchScorer.ExtractQualifiers("Daisy Crown (中文版)");
+        var remixQualifiers = MatchScorer.ExtractQualifiers("Daisy Crown (Remix Ver.)");
+        var plainQualifiers = MatchScorer.ExtractQualifiers("Daisy Crown");
+
+        Check("能从标题括号里认出「英文版」",
+            trackQualifiers.Contains(MatchScorer.QualifierKind.English), string.Join(",", trackQualifiers));
+        Check("日文版与英文版冲突", MatchScorer.QualifiersConflict(trackQualifiers, japaneseQualifiers));
+        Check("中文版与英文版冲突", MatchScorer.QualifiersConflict(trackQualifiers, chineseQualifiers));
+        Check("Remix 与英文版冲突", MatchScorer.QualifiersConflict(trackQualifiers, remixQualifiers));
+        Check("没有版本标记时不判冲突（信息不足，不能贸然排除）",
+            !MatchScorer.QualifiersConflict(trackQualifiers, plainQualifiers));
+        Check("曲目自己没有版本标记时不做任何限制",
+            !MatchScorer.QualifiersConflict(new HashSet<MatchScorer.QualifierKind>(), japaneseQualifiers));
+        Check("括号外的 live/english 不算版本标记（避免 Olivia / Englishman 这类误判）",
+            MatchScorer.ExtractQualifiers("Olivia").Count == 0 &&
+            MatchScorer.ExtractQualifiers("Englishman").Count == 0);
+        Check("伴奏 / Live / 纯音乐 也能识别",
+            MatchScorer.ExtractQualifiers("某歌 (伴奏)").Contains(MatchScorer.QualifierKind.Instrumental) &&
+            MatchScorer.ExtractQualifiers("某歌 (Live)").Contains(MatchScorer.QualifierKind.Live) &&
+            MatchScorer.ExtractQualifiers("某歌（纯音乐）").Contains(MatchScorer.QualifierKind.Instrumental));
+
+        // 回归：全量搜索返回的曲名**带**版本标记，这时排序就该直接挑出英文版。
+        var daisyFull = new List<SongCandidate>
+        {
+            new("e1", "Daisy Crown (日语)", "鸣潮先约电台/Empty old City"),
+            new("e2", "Daisy Crown (英语)", "鸣潮先约电台/Empty old City"),
+            new("e3", "Daisy Crown (国语)", "鸣潮先约电台/芜桃/Empty old City/VISION SOUND"),
+            new("e4", "Daisy Crown (伴奏)", "鸣潮先约电台/Empty old City"),
+        };
+        var rankedFull = MatchScorer.Rank(daisyTrack, daisyFull);
+        Check("曲名带版本标记时英文版排第一（Daisy Crown 回归）",
+            rankedFull[0].Candidate.Mid == "e2" && rankedFull[0].Affinity == 1,
+            rankedFull[0].Candidate.Name + "  affinity=" + rankedFull[0].Affinity +
+            "  次优=" + rankedFull[1].Candidate.Name);
+        Check("版本冲突的候选被排到最后（Affinity = -1）",
+            rankedFull[rankedFull.Count - 1].Affinity == -1,
+            rankedFull[rankedFull.Count - 1].Candidate.Name + "  affinity=" +
+            rankedFull[rankedFull.Count - 1].Affinity);
     }
 
     // ---------------- 5. QQ 接口 ----------------
@@ -377,5 +441,25 @@ internal static class Program
 
         Check("播放/暂停控制生效（已恢复原状态）", pausedOk && resumedOk,
             pausedOk ? (resumedOk ? "暂停与恢复都成功" : "暂停成功但恢复失败") : "暂停未生效");
+    }
+
+    // ---------------- 诊断：切换播放状态后退出 ----------------
+    /// <summary>只做一件事：切换当前播放状态并退出。用来在做对照测量前把音乐恢复播放。</summary>
+    private static async Task TogglePlaybackAsync()
+    {
+        using var media = new SmtcMediaService();
+        await media.StartAsync();
+        await Task.Delay(800);
+
+        if (!media.HasSession)
+        {
+            Console.WriteLine("没有 QQ 音乐会话，无法切换播放状态");
+            return;
+        }
+
+        Console.WriteLine("切换前: " + (media.IsPlaying ? "播放中" : "暂停/停止"));
+        await media.TogglePlayPauseAsync();
+        await Task.Delay(1500);
+        Console.WriteLine("切换后: " + (media.IsPlaying ? "播放中" : "暂停/停止"));
     }
 }

@@ -18,12 +18,16 @@ namespace QQMusicLyrics.Net;
 /// 只使用公开的只读接口（搜索 / 歌曲详情 / 歌词 / 封面图），不触碰任何账号数据，
 /// 也不需要登录凭证。注意两个实测要点：
 ///   1. 这些接口对 Referer 有校验，缺失会直接返回 500；
-///   2. client_search_cp 这个老搜索接口已经挂了（稳定 500），可用的搜索接口是 smartbox_new.fcg。
+///   2. 搜索走**全量搜索** `soso/fcgi-bin/search_for_qq_cp`（一次 30 条，songname 里带版本标记），
+///      取不到时退回联想接口 `smartbox_new.fcg`（只回 4 条左右，常把同名不同版本的那些漏掉）。
 /// </summary>
 public sealed class QQMusicClient : IDisposable
 {
     private static readonly Regex Base64Like = new(@"^[A-Za-z0-9+/=\s]+$", RegexOptions.Compiled);
     private static readonly Regex HasTimeTag = new(@"\[\d{1,3}:\d{1,2}", RegexOptions.Compiled);
+
+    /// <summary>全量搜索一次取多少条。</summary>
+    private const int FullSearchLimit = 30;
 
     private readonly HttpClient _http;
 
@@ -53,8 +57,69 @@ public sealed class QQMusicClient : IDisposable
     /// <summary>歌词接口实测需要播放器页作为来源，用首页会拿不到内容。</summary>
     private const string LyricReferer = "https://y.qq.com/portal/player.html";
 
-    /// <summary>按关键词搜索候选曲目。</summary>
+    /// <summary>
+    /// 按关键词搜索候选曲目。
+    ///
+    /// 优先用**全量搜索**：一次能拿 30 条，而且 `songname` 里带着版本标记
+    /// （"(英语)"、"(日语)"、"(国语)"、"(伴奏)"、"Remix"…），这对区分同名不同版本是决定性的。
+    /// 联想接口 smartbox 只回 4 条左右，实测播放 "Daisy Crown (英文版)" 时它把英文版整条漏掉了，
+    /// 导致只能在日文版/中文版里挑。所以只有全量搜索拿不到东西时才退回联想接口。
+    /// </summary>
     public async Task<IReadOnlyList<SongCandidate>> SearchAsync(string keyword, CancellationToken token)
+    {
+        var full = await SearchFullAsync(keyword, token).ConfigureAwait(false);
+        if (full.Count > 0) return full;
+        return await SuggestAsync(keyword, token).ConfigureAwait(false);
+    }
+
+    /// <summary>全量搜索（老 PC 客户端接口）：返回条数多，且曲名里带版本标记。</summary>
+    private async Task<List<SongCandidate>> SearchFullAsync(string keyword, CancellationToken token)
+    {
+        var results = new List<SongCandidate>();
+        if (string.IsNullOrWhiteSpace(keyword)) return results;
+
+        string url = "https://c.y.qq.com/soso/fcgi-bin/search_for_qq_cp?w="
+                     + Uri.EscapeDataString(keyword)
+                     + "&format=json&n=" + FullSearchLimit
+                     + "&p=1&aggr=1&cr=1&lossless=0&new_json=1";
+
+        string? json = await GetStringAsync(url, SearchReferer, token).ConfigureAwait(false);
+        if (json is null) return results;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return results;
+            if (!data.TryGetProperty("song", out var song)) return results;
+            if (!song.TryGetProperty("list", out var list) || list.ValueKind != JsonValueKind.Array) return results;
+
+            foreach (var item in list.EnumerateArray())
+            {
+                string mid = GetString(item, "songmid");
+                if (mid.Length == 0) continue;
+
+                var singers = new List<string>();
+                if (item.TryGetProperty("singer", out var singer) && singer.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var s in singer.EnumerateArray()) singers.Add(GetString(s, "name"));
+                }
+
+                string name = GetString(item, "songname");
+                if (name.Length == 0) name = GetString(item, "title");
+
+                results.Add(new SongCandidate(mid, name, string.Join("/", singers)));
+            }
+        }
+        catch (JsonException ex)
+        {
+            Log.Warn($"解析全量搜索结果失败: {ex.Message}");
+        }
+
+        return results;
+    }
+
+    /// <summary>联想接口（兜底）：只用于全量搜索失效时，条数少且不带版本标记。</summary>
+    private async Task<List<SongCandidate>> SuggestAsync(string keyword, CancellationToken token)
     {
         var results = new List<SongCandidate>();
         if (string.IsNullOrWhiteSpace(keyword)) return results;

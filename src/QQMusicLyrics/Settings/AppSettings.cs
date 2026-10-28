@@ -14,11 +14,19 @@ public sealed class AppSettings
     /// </summary>
     public int SettingsVersion { get; set; }
 
-    private const int CurrentVersion = 3;
+    private const int CurrentVersion = 4;
 
     public const double DefaultWidth = 480;
     public const double DefaultHeight = 116;
     public const double DefaultFontSize = 30;
+
+    /// <summary>
+    /// 歌词默认提前量（毫秒，正数=提前）。
+    /// 实测对照：同一首歌同时开 QQ 音乐自带桌面歌词，逐行比对我们换行的时刻，
+    /// 中位数比 QQ 慢 **约 300ms**（10 个样本里 8 个落在 +285~325ms）。
+    /// QQ 音乐本身是提前换行的，所以这里给它一个同样的提前量，观感才一致。
+    /// </summary>
+    public const int DefaultLyricOffsetMs = 300;
 
     // ---- 窗口位置（null 表示"尚未确定"，首次运行会摆到屏幕底部居中）----
     // 刻意用可空 double 而不是 NaN：System.Text.Json 默认无法把 NaN 写成合法 JSON，
@@ -49,8 +57,8 @@ public sealed class AppSettings
 
     public bool AutoStart { get; set; }
 
-    /// <summary>歌词整体偏移（毫秒），正数表示歌词提前。</summary>
-    public int LyricOffsetMs { get; set; }
+    /// <summary>歌词整体偏移（毫秒），**正数表示歌词提前**。</summary>
+    public int LyricOffsetMs { get; set; } = DefaultLyricOffsetMs;
 
     /// <summary>封面请求的分辨率档位（300/500/800）。</summary>
     public int CoverSize { get; set; } = 800;
@@ -67,8 +75,10 @@ public sealed class AppSettings
                 var loaded = JsonSerializer.Deserialize<AppSettings>(json, Options);
                 if (loaded is not null)
                 {
-                    Migrate(loaded);
+                    bool migrated = Migrate(loaded);
                     loaded.Sanitize();
+                    // 迁移结果立刻落盘，避免每次启动都重复迁移、也让文件内容与内存一致
+                    if (migrated) loaded.Save();
                     return loaded;
                 }
             }
@@ -82,7 +92,8 @@ public sealed class AppSettings
     }
 
     /// <summary>按版本补齐或重置字段；老文件里已删除的字段（如 ClickThrough / ShowBackdrop）会被忽略。</summary>
-    private static void Migrate(AppSettings settings)
+    /// <returns>是否发生了迁移。</returns>
+    private static bool Migrate(AppSettings settings)
     {
         int from = settings.SettingsVersion;
 
@@ -104,12 +115,21 @@ public sealed class AppSettings
             settings.Locked = false;
         }
 
-        if (from < CurrentVersion)
+        if (from < 4)
+        {
+            // v4：加入默认的歌词提前量（实测比 QQ 音乐自带字幕慢约 300ms）。
+            // 之前没有调节入口、这个值一直是 0，所以统一改成新的默认值。
+            settings.LyricOffsetMs = DefaultLyricOffsetMs;
+        }
+
+        bool migrated = from < CurrentVersion;
+        if (migrated)
         {
             Log.Info($"设置已从 v{from} 迁移到 v{CurrentVersion}");
         }
 
         settings.SettingsVersion = CurrentVersion;
+        return migrated;
     }
 
     public void Save()

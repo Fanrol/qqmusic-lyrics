@@ -569,6 +569,9 @@ public partial class LyricsWindow : Window
 
         if (animate)
         {
+            // 记录换行时刻：用于和 QQ 音乐自带字幕对照，排查"慢半拍"的问题
+            string preview = current.Text.Length > 18 ? current.Text.Substring(0, 18) : current.Text;
+            Log.Info($"换行 [{current.Time:mm\\:ss\\.ff}] {preview}");
             AnimateLineChange();
         }
     }
