@@ -76,6 +76,10 @@ public partial class LyricsWindow : Window
     /// <summary>光标是否落在锁图标的点击区内（只有这块区域在锁定时不穿透）。</summary>
     private bool _cursorOverLockZone;
 
+    /// <summary>"框中心"的物理像素位置（整数）。窗口宽度变化时用它反算 Left，保证按钮一格都不动。</summary>
+    private int _centerAnchorPhysical;
+    private bool _centerAnchorReady;
+
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
 
@@ -110,6 +114,7 @@ public partial class LyricsWindow : Window
         {
             _ready = true;
             ApplySettings();
+            CaptureCenterAnchor(); // 位置定下来之后再记锚点
             UpdateVisibility();
             _ticker.Start();
         };
@@ -146,7 +151,11 @@ public partial class LyricsWindow : Window
         Opacity = _settings.WindowOpacity;
         Topmost = true;
 
-        StatusLine.FontSize = Math.Max(MinFontSize, _settings.FontSize * 0.62);
+        StatusLine.FontSize = _settings.FontSize;
+
+        // "框"的宽度永远取设置里的基础宽度（默认 480），不随歌词变宽而改变；
+        // 以后加进来的内容都挂在这个框里，坐标系是稳定的。
+        BoxContainer.Width = _settings.Width;
 
         UpdateLockAppearance();
         UpdateClickThrough();
@@ -397,8 +406,8 @@ public partial class LyricsWindow : Window
         }
         else
         {
-            // 没匹配到歌词时至少把歌名显示出来，方便判断是不是匹配错了
-            SetStatus(_media.Current.DisplayName);
+            // 歌词搜不到时把"Playing: 歌名 - 歌手"当作正文显示（字号与歌词一致）
+            SetStatus("Playing: " + _media.Current.DisplayName);
         }
 
         UpdateVisibility();
@@ -420,9 +429,9 @@ public partial class LyricsWindow : Window
         else
         {
             StatusLine.Text = text;
-            StatusLine.FontSize = Math.Max(MinFontSize, _settings.FontSize * 0.62);
+            StatusLine.FontSize = _settings.FontSize;
             StatusLine.Visibility = Visibility.Visible;
-            LayoutWindowWidth(text, StatusLine.FontSize);
+            LayoutWindowWidth(text, _settings.FontSize);
         }
 
         UpdateVisibility();
@@ -517,17 +526,46 @@ public partial class LyricsWindow : Window
         SetWindowWidth(desired);
     }
 
-    private void SetWindowWidth(double newWidth)
+    private void SetWindowWidth(double desiredWidth)
     {
-        if (Math.Abs(Width - newWidth) < 0.5) return;
+        double scale = DpiScale();
 
-        double center = Left + Width / 2.0;
+        // 宽度取偶数个物理像素：这样 Width/2 在物理像素上是整数，
+        // 中心不会落在半个像素上，按钮也就不会因为奇偶而在 1px 上下抖。
+        double physical = Math.Round(desiredWidth * scale);
+        if (((long)physical & 1) != 0) physical += 1;
+        if (physical < 16) physical = 16;
+
+        double newWidth = physical / scale;
+        if (Math.Abs(Width - newWidth) < 1e-6) return;
+
+        if (!_centerAnchorReady) CaptureCenterAnchor();
+
+        if (!_centerAnchorReady)
+        {
+            Width = newWidth; // 还没有锚点（理论上不会），退化为只改宽度
+            return;
+        }
+
+        // 用锚点反算 Left：中心恒定，宽度变化只影响两侧各伸出去多少
         Width = newWidth;
+        Left = (_centerAnchorPhysical - physical / 2.0) / scale;
+    }
 
-        double desiredLeft = center - newWidth / 2.0;
-        double vLeft = SystemParameters.VirtualScreenLeft;
-        double vRight = vLeft + SystemParameters.VirtualScreenWidth;
-        Left = Math.Min(Math.Max(desiredLeft, vLeft), Math.Max(vLeft, vRight - newWidth));
+    private double DpiScale()
+    {
+        var source = PresentationSource.FromVisual(this);
+        double scale = source?.CompositionTarget?.TransformToDevice.M11 ?? 1.0;
+        return scale > 0 ? scale : 1.0;
+    }
+
+    /// <summary>记录"框中心"的物理像素位置（整数）。位置变动（启动恢复、拖动结束）后需要重新记录。</summary>
+    private void CaptureCenterAnchor()
+    {
+        if (double.IsNaN(Left) || Width <= 0) return;
+
+        _centerAnchorPhysical = (int)Math.Round((Left + Width / 2.0) * DpiScale());
+        _centerAnchorReady = true;
     }
 
     private double MeasureTextWidth(string text, double fontSize)
@@ -627,6 +665,7 @@ public partial class LyricsWindow : Window
         _dragging = false;
         ReleaseMouseCapture();
         SaveBounds();
+        CaptureCenterAnchor(); // 拖完位置变了，锚点跟着更新
     }
 
     private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)

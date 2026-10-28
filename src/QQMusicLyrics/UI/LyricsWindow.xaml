@@ -21,88 +21,99 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 三个按钮：锁 · 加 · 减，整组居中；鼠标移入浮窗才淡入，移开 1 秒后淡出 -->
-        <StackPanel x:Name="ButtonBar"
-                    Grid.Row="0"
-                    Orientation="Horizontal"
-                    HorizontalAlignment="Center"
-                    VerticalAlignment="Top"
-                    Margin="0,6,0,0"
-                    Opacity="0">
+        <!--
+            固定宽度的"框"：宽度在代码里设成设置中的 Width（默认 480）。
+            以后要往浮窗里加的内容（封面、歌曲信息等）都放进这个容器，
+            它的坐标系永远以 480 为基准，不会随歌词变宽而移动。
+        -->
+        <Grid x:Name="BoxContainer"
+              Grid.Row="0"
+              Width="480"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Top">
 
-            <Border x:Name="LockButton"
-                    Width="24" Height="24"
-                    Margin="0,0,14,0"
-                    Background="Transparent"
-                    Cursor="Hand">
-                <Border.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
-                </Border.Effect>
-                <Viewbox Stretch="Uniform">
-                    <!-- 24x24 设计坐标，与 Glyphs 的 GDI+ 版本保持一致 -->
-                    <Canvas Width="24" Height="24">
-                        <Rectangle x:Name="LockBody"
-                                   Canvas.Left="5" Canvas.Top="11" Width="14" Height="10"
-                                   RadiusX="2.5" RadiusY="2.5"
-                                   Stroke="White" StrokeThickness="1.6" />
+            <!-- 三个按钮：锁 · 加 · 减，在框内居中；鼠标移入浮窗才淡入，移开 1 秒后淡出 -->
+            <StackPanel x:Name="ButtonBar"
+                        Orientation="Horizontal"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        Margin="0,6,0,0"
+                        Opacity="0">
 
-                        <!-- 开着的锁：只扫 130°，右侧留明显缺口 -->
-                        <Path x:Name="LockShackleOpen"
-                              Stroke="White" StrokeThickness="1.6"
-                              StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 14.25,4.82" />
+                <Border x:Name="LockButton"
+                        Width="24" Height="24"
+                        Margin="0,0,14,0"
+                        Background="Transparent"
+                        Cursor="Hand">
+                    <Border.Effect>
+                        <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
+                    </Border.Effect>
+                    <Viewbox Stretch="Uniform">
+                        <!-- 24x24 设计坐标，与 Glyphs 的 GDI+ 版本保持一致 -->
+                        <Canvas Width="24" Height="24">
+                            <Rectangle x:Name="LockBody"
+                                       Canvas.Left="5" Canvas.Top="11" Width="14" Height="10"
+                                       RadiusX="2.5" RadiusY="2.5"
+                                       Stroke="White" StrokeThickness="1.6" />
 
-                        <!-- 关着的锁：扫 180° + 右腿落回锁体 -->
-                        <Path x:Name="LockShackleClosed"
-                              Stroke="White" StrokeThickness="1.6"
-                              StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 15.5,7.5 L 15.5,11"
-                              Visibility="Collapsed" />
-                    </Canvas>
-                </Viewbox>
-            </Border>
+                            <!-- 开着的锁：只扫 130°，右侧留明显缺口 -->
+                            <Path x:Name="LockShackleOpen"
+                                  Stroke="White" StrokeThickness="1.6"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 14.25,4.82" />
 
-            <Border x:Name="PlusButton"
-                    Width="24" Height="24"
-                    Margin="0,0,6,0"
-                    Background="Transparent"
-                    Cursor="Hand"
-                    Visibility="Hidden">
-                <Border.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
-                </Border.Effect>
-                <Viewbox Stretch="Uniform">
-                    <Canvas Width="24" Height="24">
-                        <Path Stroke="White" StrokeThickness="1.6"
-                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              Data="M 6,13 L 18,13 M 12,7 L 12,19" />
-                    </Canvas>
-                </Viewbox>
-            </Border>
+                            <!-- 关着的锁：扫 180° + 右腿落回锁体 -->
+                            <Path x:Name="LockShackleClosed"
+                                  Stroke="White" StrokeThickness="1.6"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 15.5,7.5 L 15.5,11"
+                                  Visibility="Collapsed" />
+                        </Canvas>
+                    </Viewbox>
+                </Border>
 
-            <Border x:Name="MinusButton"
-                    Width="24" Height="24"
-                    Background="Transparent"
-                    Cursor="Hand"
-                    Visibility="Hidden">
-                <Border.Effect>
-                    <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
-                </Border.Effect>
-                <Viewbox Stretch="Uniform">
-                    <Canvas Width="24" Height="24">
-                        <Path Stroke="White" StrokeThickness="1.6"
-                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                              Data="M 6,13 L 18,13" />
-                    </Canvas>
-                </Viewbox>
-            </Border>
-        </StackPanel>
+                <Border x:Name="PlusButton"
+                        Width="24" Height="24"
+                        Margin="0,0,6,0"
+                        Background="Transparent"
+                        Cursor="Hand"
+                        Visibility="Hidden">
+                    <Border.Effect>
+                        <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
+                    </Border.Effect>
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="24" Height="24">
+                            <Path Stroke="White" StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Data="M 6,13 L 18,13 M 12,7 L 12,19" />
+                        </Canvas>
+                    </Viewbox>
+                </Border>
 
-        <!-- 单行歌词（需要翻译时是它下面的一小行） -->
+                <Border x:Name="MinusButton"
+                        Width="24" Height="24"
+                        Background="Transparent"
+                        Cursor="Hand"
+                        Visibility="Hidden">
+                    <Border.Effect>
+                        <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
+                    </Border.Effect>
+                    <Viewbox Stretch="Uniform">
+                        <Canvas Width="24" Height="24">
+                            <Path Stroke="White" StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Data="M 6,13 L 18,13" />
+                        </Canvas>
+                    </Viewbox>
+                </Border>
+            </StackPanel>
+        </Grid>
+
+        <!-- 歌词：独立于上面的框，可以超出 480 向两侧延伸（窗口会跟着变宽） -->
         <StackPanel x:Name="ContentPanel"
                     Grid.Row="1"
                     VerticalAlignment="Center"
-                    HorizontalAlignment="Stretch"
+                    HorizontalAlignment="Center"
                     Margin="16,0,16,4">
 
             <TextBlock x:Name="CurrentLine"
@@ -135,21 +146,23 @@
             </TextBlock>
         </StackPanel>
 
-        <!-- 临时状态文字：正在匹配歌词 / 未找到歌词 -->
+        <!--
+            兜底文字：歌词没搜到时显示 "Playing: 歌名 - 歌手"。
+            字号与歌词完全一致（不再用小字），超长同样由窗口撑开来显示。
+        -->
         <TextBlock x:Name="StatusLine"
-                   Grid.RowSpan="2"
+                   Grid.Row="1"
                    TextAlignment="Center"
                    TextWrapping="NoWrap"
-                   TextTrimming="CharacterEllipsis"
                    HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    Margin="16,0"
-                   Foreground="#C8FFFFFF"
+                   Foreground="White"
                    FontFamily="Microsoft YaHei UI"
-                   FontWeight="SemiBold"
+                   FontWeight="Bold"
                    Visibility="Collapsed">
             <TextBlock.Effect>
-                <DropShadowEffect Color="Black" BlurRadius="7" ShadowDepth="0" Opacity="0.9" />
+                <DropShadowEffect Color="Black" BlurRadius="8" ShadowDepth="0" Opacity="0.95" />
             </TextBlock.Effect>
         </TextBlock>
     </Grid>
