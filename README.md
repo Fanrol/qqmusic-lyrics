@@ -106,6 +106,38 @@ dotnet build QQMusicLyrics.sln -c Release
 dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true
 ```
 
+### 本机自签名（让 Windows 认得出发布者）
+
+本仓库不随带商业代码签名证书，所以直接编译出来的 exe 是"未签名 + 零信誉"，
+Windows 可能把它当成"无法识别的应用"（SmartScreen）或显示"未知发布者"（UAC）。
+`tools\Sign-App.ps1` 用**自签名证书**解决本机上的这个问题：
+
+```powershell
+# 需要管理员权限（要把证书装进本机证书库）
+.\tools\Sign-App.ps1
+```
+
+脚本做三件事：
+
+1. 在 `Cert:\CurrentUser\My` 创建一枚**代码签名**自签证书（`CN=Fanrol`，有效期 5 年；已存在则复用）；
+2. 把它的公钥装进本机的 **Root（受信任的根证书颁发机构）** 和 **TrustedPublisher（受信任的发布者）**；
+3. 用 `signtool` 给 exe 签名（带 DigiCert 时间戳，证书过期后签名仍有效），最后校验。
+
+常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| `-Subject "CN=别的名字"` | 换发布者名字（UAC 和文件属性里显示的就是它） |
+| `-Recreate` | 丢掉旧证书重新生成 |
+| `-ExePath <路径>` | 签别的 exe |
+| `-Remove` | **撤销**：把证书从本机 Root / TrustedPublisher / 当前用户 My 里移除 |
+
+注意事项：
+
+- **只对这台机器有效**：别的电脑没有这枚根证书，签名链不可信，仍会报同样的问题。
+- **每次重新编译都要重签**（exe 变了，签名就没了）。想自动化可以在构建后加一步调用这个脚本。
+- 装进 Root 等于让本机信任你自建的 CA，这在本机是可接受的取舍；**但不要把这枚证书分发给别人让别人装**。
+
 ## 运行
 
 程序清单里声明了 `requireAdministrator`，所以**双击时会弹一次 UAC**，允许后才会启动。也可以用命令行：
@@ -281,6 +313,9 @@ dotnet run --project tests\QQMusicLyrics.SelfTest -c Release
 | 17 | 浮窗会被别的窗口盖住，不再是"一直在最顶端" | `Window.Topmost` 只保证在"非置顶层之上"。多个置顶窗口之间 Windows 仍按激活顺序排队，别的置顶窗口（游戏浮层、播放器歌词窗）一激活就跑到前面 | 定时（每 0.5 秒）用 `SetWindowPos(HWND_TOPMOST, SWP_NOACTIVATE)` 把自己重新压到置顶层最上面。实测：新建一个同样 TopMost 的红色窗口盖上去，1.4 秒后浮窗内容仍显示在红色之上 |
 | 18 | 放 `Monster - Alan Walker` 却匹配成 BIGBANG 的韩语同名歌 | 两处叠加：①`Pick` 的阈值 0.50 而"歌名全等"单项就给 0.65，**歌手完全不对也及格**；②`FindBestMatchAsync` 一旦第一个关键词挑出及格候选就 `return`，永远不会去搜 `Monster Alan Walker`（那个关键词第一条就是 1.000 的完美匹配） | 改成"每个关键词搜完都把目前所有候选重新评一遍，只留全局最优"，并加 `Evaluate` 暴露各项分数；分数 ≥0.95 才提前结束。回归测试覆盖了 5 条同名候选的排序，并用自测的 `--match` 参数跑真实网络，验证拿到 32 行正确歌词 |
 | 19 | 自测里"位置连续推进"会误报失败 | 播放处于暂停状态时位置本来就不推进 | 先判断 `IsPlaying`，暂停时跳过该项并打印说明 |
+| 20 | Windows 把自编译的 exe 当成"无法识别的应用"（SmartScreen），点完仍要运行才弹 UAC | 没有商业代码签名证书 → 未签名 + 零信誉 + 发布者未知。**注意：一开始误以为必须有 MOTW（`Zone.Identifier`）才会触发，实测 `cmd /r dir` 确认这个 exe 没有 MOTW 也照样被拦** | 用 `tools\Sign-App.ps1` 做自签名：`New-SelfSignedCertificate -Type CodeSigningCert` 生成证书 → 公钥装进本机 Root + TrustedPublisher → `signtool sign` 带时间戳。签名后 `Get-AuthenticodeSignature` 为 `Valid`、证书链在本机校验通过、`signtool verify /pa` 通过 |
+| 21 | PowerShell 跑中文注释的 .ps1 报一堆语法错 | PowerShell 5.1 按 ANSI(GBK) 读无 BOM 的 .ps1，UTF-8 中文变乱码后把字符串终止符吃掉 | 脚本必须以 **UTF-8 with BOM** 保存（本仓库的 `tools\*.ps1` 都是带 BOM 的） |
+| 22 | `New-Object X509Certificate2($cert.RawData)` 报"参数个数 758 不匹配" | PowerShell 把 `byte[]` 拆成一个个参数了 | 写成 `New-Object ... -ArgumentList @(, $cert.RawData)`，用一维数组包一层阻止展开 |
 
 另外两个与代码无关但值得记的环境事实：
 
@@ -293,6 +328,7 @@ dotnet run --project tests\QQMusicLyrics.SelfTest -c Release
 ```
 qqmusic-lyrics/
 ├─ QQMusicLyrics.sln                解决方案（程序 + 自测）
+├─ tools/Sign-App.ps1              本机自签名脚本（生成证书 + 装信任根 + 签名 exe）
 ├─ src/QQMusicLyrics/               程序本体
 │  ├─ app.manifest                  管理员权限清单（requireAdministrator）
 │  ├─ App.xaml(.cs)                 入口：单实例、装配各层、曲目变化 → 歌词解析
