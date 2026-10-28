@@ -15,17 +15,55 @@
         TextOptions.TextFormattingMode="Ideal">
 
     <Grid x:Name="Root">
-        <!-- 可选背景板：给纯白歌词垫一层深色底，在亮色画面上更易读 -->
-        <Border x:Name="Backdrop"
-                CornerRadius="10"
-                Background="#FF000000"
-                Opacity="0.30" />
+        <Grid.RowDefinitions>
+            <!-- 固定高度：锁按钮出现/消失时歌词不会上下跳 -->
+            <RowDefinition Height="30" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- 锁定键：矢量细线锁，悬停时出现，鼠标离开 2 秒后隐藏 -->
+        <Border x:Name="LockButton"
+                Grid.Row="0"
+                Width="24"
+                Height="24"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,6,0,0"
+                Background="Transparent"
+                Cursor="Hand"
+                Visibility="Collapsed"
+                Opacity="0">
+            <Border.Effect>
+                <DropShadowEffect Color="Black" BlurRadius="6" ShadowDepth="0" Opacity="0.9" />
+            </Border.Effect>
+            <Viewbox Stretch="Uniform">
+                <!-- 24x24 设计坐标，与 LockGlyph 的 GDI+ 版本保持一致 -->
+                <Canvas Width="24" Height="24">
+                    <Rectangle x:Name="LockBody"
+                               Canvas.Left="5" Canvas.Top="11" Width="14" Height="10"
+                               RadiusX="2.5" RadiusY="2.5"
+                               Stroke="White" StrokeThickness="1.6" />
+
+                    <Path x:Name="LockShackleOpen"
+                          Stroke="White" StrokeThickness="1.6"
+                          StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 15.5,7.5" />
+
+                    <Path x:Name="LockShackleClosed"
+                          Stroke="White" StrokeThickness="1.6"
+                          StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                          Data="M 8.5,11 L 8.5,7.5 A 3.5,3.5 0 0 1 15.5,7.5 L 15.5,11"
+                          Visibility="Collapsed" />
+                </Canvas>
+            </Viewbox>
+        </Border>
 
         <!-- 单行歌词（需要翻译时是它下面的一小行） -->
         <StackPanel x:Name="ContentPanel"
+                    Grid.Row="1"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Stretch"
-                    Margin="16,4,16,4">
+                    Margin="16,0,16,4">
 
             <TextBlock x:Name="CurrentLine"
                        TextAlignment="Center"
@@ -60,6 +98,7 @@
 
         <!-- 临时状态文字：正在匹配歌词 / 未找到歌词 -->
         <TextBlock x:Name="StatusLine"
+                   Grid.RowSpan="2"
                    TextAlignment="Center"
                    TextWrapping="NoWrap"
                    TextTrimming="CharacterEllipsis"

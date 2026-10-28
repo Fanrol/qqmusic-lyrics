@@ -8,33 +8,46 @@ using QQMusicLyrics.Models;
 namespace QQMusicLyrics.UI;
 
 /// <summary>
-/// 托盘图标与菜单。因为浮窗常驻置顶且可能开启鼠标穿透，托盘是唯一"永远够得着"的控制入口。
+/// 托盘图标与右键菜单。
+///
+/// 浮窗常驻置顶，锁定后还会开启鼠标穿透，所以托盘是"永远够得着"的控制入口；
+/// 托盘菜单与浮窗右键菜单是同一个对象，保证两处完全一致。
+///
+/// 菜单只有四项：显示 / 隐藏 / 锁定(解锁) / 退出。
 /// </summary>
 public sealed class TrayIcon : IDisposable
 {
+    /// <summary>菜单项上下留白，让行距松一点。</summary>
+    private static readonly Padding ItemPadding = new(2, 7, 2, 7);
+
     private readonly NotifyIcon _notifyIcon;
     private readonly ContextMenuStrip _menu;
     private readonly AppCommands _commands;
     private readonly Icon _icon;
 
-    private readonly ToolStripMenuItem _visibleItem = new("显示浮窗");
-    private readonly ToolStripMenuItem _clickThroughItem = new("鼠标穿透（打游戏不挡操作）");
-    private readonly ToolStripMenuItem _lockedItem = new("锁定位置");
-    private readonly ToolStripMenuItem _hideWhenNoQqMusicItem = new("QQ 音乐未运行时隐藏");
+    private readonly ToolStripMenuItem _showItem = new("显示");
+    private readonly ToolStripMenuItem _hideItem = new("隐藏");
+    private readonly ToolStripMenuItem _lockItem = new("锁定");
+    private readonly ToolStripMenuItem _exitItem = new("退出");
 
-    private readonly ToolStripMenuItem _translationItem = new("显示翻译歌词");
-    private readonly ToolStripMenuItem _backdropItem = new("显示深色背景板");
-    private readonly ToolStripMenuItem _offsetItem = new("歌词偏移：0 ms");
-    private readonly ToolStripMenuItem _fontItem = new("字号：30");
-
-    private readonly ToolStripMenuItem _autoStartItem = new("开机自启");
+    private readonly Bitmap _lockOpenImage;
+    private readonly Bitmap _lockClosedImage;
 
     public TrayIcon(AppCommands commands)
     {
         _commands = commands;
         _icon = CreateIcon();
 
-        _menu = new ContextMenuStrip { ShowImageMargin = false };
+        // 菜单里那张锁图标用深色描边（菜单是浅色底），和浮窗上的白色版本同一套形状
+        _lockOpenImage = LockGlyph.CreateMenuBitmap(locked: false, color: Color.FromArgb(60, 60, 60), size: 32);
+        _lockClosedImage = LockGlyph.CreateMenuBitmap(locked: true, color: Color.FromArgb(60, 60, 60), size: 32);
+
+        _menu = new ContextMenuStrip
+        {
+            ShowImageMargin = true, // 给锁定项左边的图标留出位置
+            Font = new Font("Microsoft YaHei UI", 9f),
+            ImageScalingSize = new Size(16, 16),
+        };
         BuildMenu();
 
         _notifyIcon = new NotifyIcon
@@ -44,89 +57,48 @@ public sealed class TrayIcon : IDisposable
             Visible = true,
             ContextMenuStrip = _menu,
         };
-        _notifyIcon.DoubleClick += (_, _) => _commands.ToggleVisible();
 
-        _commands.StateChanged += (_, _) => SyncCheckedState();
-        SyncCheckedState();
+        _commands.StateChanged += (_, _) => SyncMenuState();
+        SyncMenuState();
     }
 
     private void BuildMenu()
     {
-        _visibleItem.Click += (_, _) => _commands.ToggleVisible();
-        _clickThroughItem.Click += (_, _) => _commands.ToggleClickThrough();
-        _lockedItem.Click += (_, _) => _commands.ToggleLocked();
-        _hideWhenNoQqMusicItem.Click += (_, _) => _commands.ToggleHideWhenNoQqMusic();
+        _showItem.Padding = ItemPadding;
+        _hideItem.Padding = ItemPadding;
+        _lockItem.Padding = ItemPadding;
+        _exitItem.Padding = ItemPadding;
 
-        _menu.Items.Add(_visibleItem);
-        _menu.Items.Add(_clickThroughItem);
-        _menu.Items.Add(_lockedItem);
-        _menu.Items.Add(_hideWhenNoQqMusicItem);
+        _showItem.Click += (_, _) => _commands.ShowWindow();
+        _hideItem.Click += (_, _) => _commands.HideWindow();
+        _lockItem.Click += (_, _) => _commands.ToggleLocked();
+        _exitItem.Click += (_, _) => _commands.Exit();
+
+        _menu.Items.Add(_showItem);
+        _menu.Items.Add(_hideItem);
+        _menu.Items.Add(_lockItem);
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(_exitItem);
 
-        _menu.Items.Add(MakeItem("上一首", () => _commands.PreviousTrack()));
-        _menu.Items.Add(MakeItem("播放 / 暂停", () => _commands.PlayPause()));
-        _menu.Items.Add(MakeItem("下一首", () => _commands.NextTrack()));
-        _menu.Items.Add(new ToolStripSeparator());
-
-        _menu.Items.Add(MakeItem("重新匹配歌词", () => _commands.ReloadLyrics()));
-        _menu.Items.Add(new ToolStripSeparator());
-
-        _translationItem.Click += (_, _) => _commands.ToggleTranslation();
-        _backdropItem.Click += (_, _) => _commands.ToggleBackdrop();
-        _menu.Items.Add(_translationItem);
-        _menu.Items.Add(_backdropItem);
-
-        var offsetEarlier = MakeItem("歌词提前 100 ms", () => _commands.ShiftLyrics(+100));
-        var offsetLater = MakeItem("歌词延后 100 ms", () => _commands.ShiftLyrics(-100));
-        var offsetReset = MakeItem("偏移归零", () => _commands.ResetLyricOffset());
-        _offsetItem.Enabled = false;
-        _menu.Items.Add(_offsetItem);
-        _menu.Items.Add(offsetEarlier);
-        _menu.Items.Add(offsetLater);
-        _menu.Items.Add(offsetReset);
-
-        var fontPlus = MakeItem("字号 +", () => _commands.IncreaseFont());
-        var fontMinus = MakeItem("字号 −", () => _commands.DecreaseFont());
-        var fontReset = MakeItem("字号重置", () => _commands.ResetFont());
-        _fontItem.Enabled = false;
-        _menu.Items.Add(_fontItem);
-        _menu.Items.Add(fontPlus);
-        _menu.Items.Add(fontMinus);
-        _menu.Items.Add(fontReset);
-        _menu.Items.Add(new ToolStripSeparator());
-
-        _autoStartItem.Click += (_, _) => _commands.ToggleAutoStart();
-        _menu.Items.Add(_autoStartItem);
-        _menu.Items.Add(new ToolStripSeparator());
-
-        _menu.Items.Add(MakeItem("退出", () => _commands.Exit()));
+        // 每次弹出前刷新锁定项的文案与图标
+        _menu.Opening += (_, _) => SyncMenuState();
     }
 
-    private static ToolStripMenuItem MakeItem(string text, Action onClick)
+    /// <summary>
+    /// 锁定项显示的是"下一步动作"：未锁定时写「锁定」并配开着的锁；
+    /// 锁定后写「解锁」并配关着的锁。
+    /// </summary>
+    private void SyncMenuState()
     {
-        var item = new ToolStripMenuItem(text);
-        item.Click += (_, _) => onClick();
-        return item;
-    }
-
-    /// <summary>菜单每次弹出前同步勾选状态，避免显示的是旧状态。</summary>
-    private void SyncCheckedState()
-    {
-        _visibleItem.Checked = _commands.IsVisible;
-        _clickThroughItem.Checked = _commands.Settings.ClickThrough;
-        _lockedItem.Checked = _commands.Settings.Locked;
-        _hideWhenNoQqMusicItem.Checked = _commands.Settings.HideWhenNoQqMusic;
-        _translationItem.Checked = _commands.Settings.ShowTranslation;
-        _backdropItem.Checked = _commands.Settings.ShowBackdrop;
-        _offsetItem.Text = $"歌词偏移：{_commands.Settings.LyricOffsetMs} ms";
-        _fontItem.Text = $"字号：{_commands.Settings.FontSize:0}";
-        _autoStartItem.Checked = _commands.IsAutoStartEnabled;
+        bool locked = _commands.IsLocked;
+        _lockItem.Text = locked ? "解锁" : "锁定";
+        _lockItem.Image = locked ? _lockClosedImage : _lockOpenImage;
     }
 
     /// <summary>在鼠标位置弹出菜单（浮窗右键时复用同一个菜单）。</summary>
     public void ShowMenu()
     {
-        SyncCheckedState();
+        SyncMenuState();
         _menu.Show(System.Windows.Forms.Cursor.Position);
     }
 
@@ -192,5 +164,7 @@ public sealed class TrayIcon : IDisposable
         _notifyIcon.Dispose();
         _menu.Dispose();
         _icon.Dispose();
+        _lockOpenImage.Dispose();
+        _lockClosedImage.Dispose();
     }
 }

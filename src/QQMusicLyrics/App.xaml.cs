@@ -61,11 +61,15 @@ public partial class App : Application
         _media = new SmtcMediaService();
         _resolver = new LyricResolver(_settings.CoverSize);
         _window = new LyricsWindow(_media, _settings);
-        _commands = new AppCommands(_settings, _media, _window, ReloadLyrics, ExitApp);
+        _commands = new AppCommands(_settings, _window, ExitApp);
         _tray = new TrayIcon(_commands);
 
         // 浮窗右键复用托盘菜单，避免维护两套
         _window.ContextMenuRequested += (_, _) => _tray.ShowMenu();
+
+        // 浮窗上的锁定键与菜单里的"锁定/解锁"走同一条命令
+        _window.LockToggleRequested += (_, _) => _commands.ToggleLocked();
+
         _window.SettingsChanged += (_, _) => _settings.Save();
 
         _media.TrackChanged += OnTrackChanged;

@@ -17,6 +17,10 @@
     <AssemblyTitle>QQ音乐浮窗歌词</AssemblyTitle>
     <NeutralLanguage>zh-Hans</NeutralLanguage>
     <EnableDefaultApplicationDefinition>true</EnableDefaultApplicationDefinition>
+    <!-- 管理员权限清单：没有它托盘图标在部分环境下注册不上 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- WPF 自身是 PerMonitorV2；这里显式声明一下，WinForms 部分（托盘菜单）也按此处理 -->
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- 便于出问题时看到完整异常信息 -->
     <DebugType>portable</DebugType>
   </PropertyGroup>

@@ -15,12 +15,15 @@ using QQMusicLyrics.Settings;
 namespace QQMusicLyrics.UI;
 
 /// <summary>
-/// 浮窗本体：无边框 + 逐像素透明 + 置顶 + 不出现在 Alt+Tab/任务栏。
-/// 默认只有一行歌词，换行时直接切换（不做滚动，也不显示上下句）。
+/// 浮窗本体：无边框 + 完全透明 + 置顶 + 不出现在 Alt+Tab/任务栏。
+/// 默认只有一行歌词，换行时直接切换（不滚动、不显示上下句），没有任何背景板。
 ///
 /// 显示规则：只有存在 QQ 音乐媒体会话时才显示。浏览器放 B 站视频同样会产生
-/// SMTC 会话，但采集层只认 QQMusic.exe，所以这里 HasSession 为 false 时
-/// 浮窗会完全隐藏——这正是"QQ 音乐没在用时什么都不显示"。
+/// SMTC 会话，但采集层只认 QQMusic.exe，所以这里 HasSession 为 false 时浮窗完全隐藏。
+///
+/// 锁定语义：锁定 = 同时开启鼠标穿透。因此锁定后浮窗收不到任何鼠标事件，
+/// 解锁只能通过托盘菜单；浮窗上的锁定键只在未锁定状态下可点。
+/// 悬停判定不依赖窗口事件（穿透时收不到），而是轮询光标位置。
 /// </summary>
 public partial class LyricsWindow : Window
 {
@@ -29,6 +32,9 @@ public partial class LyricsWindow : Window
 
     /// <summary>自动缩字的下限，再长就交给省略号。</summary>
     private const double MinAutoFontSize = 12;
+
+    /// <summary>鼠标离开浮窗多久后隐藏锁定键。</summary>
+    private static readonly TimeSpan LockButtonHideDelay = TimeSpan.FromSeconds(2);
 
     private readonly SmtcMediaService _media;
     private readonly AppSettings _settings;
@@ -48,8 +54,16 @@ public partial class LyricsWindow : Window
     private double _dragOriginLeft;
     private double _dragOriginTop;
 
+    // 锁定键的悬停状态
+    private bool _cursorInside;
+    private bool _lockButtonShown;
+    private DateTime _cursorLeftAt = DateTime.UtcNow;
+
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
+
+    /// <summary>用户点了浮窗上的锁定键。</summary>
+    public event EventHandler? LockToggleRequested;
 
     /// <summary>通过滚轮等方式改了设置，通知外层持久化。</summary>
     public event EventHandler? SettingsChanged;
@@ -73,7 +87,7 @@ public partial class LyricsWindow : Window
 
         _ticker = new DispatcherTimer(DispatcherPriority.Render)
         {
-            Interval = TimeSpan.FromMilliseconds(33), // ~30fps，只用于判断"该换行了"
+            Interval = TimeSpan.FromMilliseconds(33), // ~30fps，用于换行判断与锁定键悬停检测
         };
         _ticker.Tick += OnTick;
 
@@ -96,6 +110,8 @@ public partial class LyricsWindow : Window
         MouseRightButtonUp += OnMouseRightButtonUp;
         MouseWheel += OnMouseWheel;
 
+        LockButton.MouseLeftButtonDown += OnLockButtonClick;
+
         SetStatus(string.Empty);
     }
 
@@ -103,7 +119,7 @@ public partial class LyricsWindow : Window
     {
         _handle = new WindowInteropHelper(this).Handle;
         NativeMethods.ApplyOverlayStyles(_handle);
-        NativeMethods.SetClickThrough(_handle, _settings.ClickThrough);
+        NativeMethods.SetClickThrough(_handle, _settings.Locked);
     }
 
     // ---------------- 外观 ----------------
@@ -115,13 +131,14 @@ public partial class LyricsWindow : Window
         Opacity = _settings.WindowOpacity;
         Topmost = true;
 
-        Backdrop.Visibility = _settings.ShowBackdrop ? Visibility.Visible : Visibility.Collapsed;
-        Backdrop.Opacity = _settings.BackdropOpacity;
         StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
 
+        UpdateLockAppearance();
+
+        // 锁定 = 鼠标穿透
         if (_handle != IntPtr.Zero)
         {
-            NativeMethods.SetClickThrough(_handle, _settings.ClickThrough);
+            NativeMethods.SetClickThrough(_handle, _settings.Locked);
         }
 
         // 让字号、翻译开关这类改动立刻反映到画面上
@@ -133,6 +150,14 @@ public partial class LyricsWindow : Window
         UpdateVisibility();
     }
 
+    /// <summary>根据锁定状态切换锁图标：未锁定显示开着的锁，锁定显示关着的锁。</summary>
+    private void UpdateLockAppearance()
+    {
+        bool locked = _settings.Locked;
+        LockShackleClosed.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
+        LockShackleOpen.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
+    }
+
     private void RestorePosition()
     {
         // 这里必须全程使用 DIP（设备无关像素）。
@@ -141,11 +166,11 @@ public partial class LyricsWindow : Window
         // SystemParameters.WorkArea 正好是 DIP 单位，直接用它就没有换算问题。
         Rect work = SystemParameters.WorkArea;
 
-        if (!double.IsNaN(_settings.Left) && !double.IsNaN(_settings.Top) &&
-            IsOnAnyScreen(_settings.Left, _settings.Top))
+        if (_settings.Left is double savedLeft && _settings.Top is double savedTop &&
+            IsOnAnyScreen(savedLeft, savedTop))
         {
-            Left = _settings.Left;
-            Top = _settings.Top;
+            Left = savedLeft;
+            Top = savedTop;
         }
         else
         {
@@ -201,9 +226,24 @@ public partial class LyricsWindow : Window
 
             if (!shouldHide)
             {
-                _lineIndex = -1; // 重新显示时强制重画
+                _lineIndex = -1;       // 重新显示时强制重画
+                _cursorInside = false; // 悬停状态重新判断
             }
         }
+    }
+
+    /// <summary>托盘菜单的"显示"。</summary>
+    public void ShowFromMenu()
+    {
+        IsUserHidden = false;
+        UpdateVisibility();
+    }
+
+    /// <summary>托盘菜单的"隐藏"。</summary>
+    public void HideFromMenu()
+    {
+        IsUserHidden = true;
+        UpdateVisibility();
     }
 
     private void OnSessionAvailabilityChanged(object? sender, bool available)
@@ -219,10 +259,67 @@ public partial class LyricsWindow : Window
         }
     }
 
-    public void ToggleUserVisibility()
+    // ---------------- 锁定键 ----------------
+
+    private void OnLockButtonClick(object sender, MouseButtonEventArgs e)
     {
-        IsUserHidden = !IsUserHidden;
-        UpdateVisibility();
+        // 标记已处理，避免同时触发窗口拖动
+        e.Handled = true;
+        LockToggleRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>
+    /// 轮询光标位置判断是否悬停在浮窗上。
+    /// 不能用 MouseEnter/MouseLeave：锁定后窗口是穿透的，收不到任何鼠标事件。
+    /// </summary>
+    private void UpdateLockButtonHover()
+    {
+        if (!TryGetMousePositionInDip(out Point cursor)) return;
+
+        bool inside = cursor.X >= Left && cursor.X <= Left + Width &&
+                      cursor.Y >= Top && cursor.Y <= Top + Height;
+
+        if (inside)
+        {
+            _cursorInside = true;
+            if (!_lockButtonShown) ShowLockButton(true);
+            return;
+        }
+
+        if (_cursorInside)
+        {
+            _cursorInside = false;
+            _cursorLeftAt = DateTime.UtcNow;
+        }
+
+        if (_lockButtonShown && DateTime.UtcNow - _cursorLeftAt >= LockButtonHideDelay)
+        {
+            ShowLockButton(false);
+        }
+    }
+
+    private void ShowLockButton(bool show)
+    {
+        _lockButtonShown = show;
+        Log.Info($"锁定键{(show ? "显示" : "隐藏")}（鼠标{(show ? "进入" : "离开超过 2 秒")}浮窗）");
+
+        if (show)
+        {
+            LockButton.Visibility = Visibility.Visible;
+            LockButton.BeginAnimation(OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(120)));
+            return;
+        }
+
+        var fade = new DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(200));
+        fade.Completed += (_, _) =>
+        {
+            if (!_lockButtonShown) // 淡出过程中可能又被鼠标移入
+            {
+                LockButton.Visibility = Visibility.Collapsed;
+            }
+        };
+        LockButton.BeginAnimation(OpacityProperty, fade);
     }
 
     // ---------------- 歌词渲染 ----------------
@@ -282,6 +379,9 @@ public partial class LyricsWindow : Window
     {
         UpdateVisibility();
         if (Visibility != Visibility.Visible) return;
+
+        UpdateLockButtonHover();
+
         if (!_showingLyrics || _lyrics.Lines.Count == 0) return;
 
         int index = FindLineIndex(CurrentPosition());
@@ -396,13 +496,13 @@ public partial class LyricsWindow : Window
         CurrentLineOffset.BeginAnimation(TranslateTransform.YProperty, slide);
     }
 
-    // ---------------- 鼠标交互 ----------------
+    // ---------------- 鼠标交互（仅在未锁定时有效）----------------
 
-    private bool CanInteract => !_settings.ClickThrough;
+    private bool CanInteract => !_settings.Locked;
 
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
-        if (!CanInteract || _settings.Locked) return;
+        if (!CanInteract) return;
 
         _dragging = true;
         _dragStartMouse = GetMousePositionInDip();
@@ -429,21 +529,32 @@ public partial class LyricsWindow : Window
     /// </summary>
     private Point GetMousePositionInDip()
     {
+        if (TryGetMousePositionInDip(out Point point)) return point;
+
+        // 兜底：理论上不会走到，至少还能动
+        Point fallback = Mouse.GetPosition(this);
+        return new Point(_dragOriginLeft + fallback.X, _dragOriginTop + fallback.Y);
+    }
+
+    /// <summary>把光标位置换算成 DIP；失败返回 false。</summary>
+    private bool TryGetMousePositionInDip(out Point point)
+    {
         if (!NativeMethods.TryGetCursorPosition(out NativeMethods.POINT cursor))
         {
-            // 理论上不会失败；真失败就退回窗口相对坐标，至少还能动
-            Point fallback = Mouse.GetPosition(this);
-            return new Point(_dragOriginLeft + fallback.X, _dragOriginTop + fallback.Y);
+            point = default;
+            return false;
         }
 
         var source = PresentationSource.FromVisual(this);
         if (source?.CompositionTarget is null)
         {
-            return new Point(cursor.X, cursor.Y);
+            point = new Point(cursor.X, cursor.Y);
+            return false;
         }
 
         // 物理像素 -> DIP
-        return source.CompositionTarget.TransformFromDevice.Transform(new Point(cursor.X, cursor.Y));
+        point = source.CompositionTarget.TransformFromDevice.Transform(new Point(cursor.X, cursor.Y));
+        return true;
     }
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)

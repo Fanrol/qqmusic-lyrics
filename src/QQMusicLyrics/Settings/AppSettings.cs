@@ -14,15 +14,17 @@ public sealed class AppSettings
     /// </summary>
     public int SettingsVersion { get; set; }
 
-    private const int CurrentVersion = 2;
+    private const int CurrentVersion = 3;
 
     public const double DefaultWidth = 480;
     public const double DefaultHeight = 116;
     public const double DefaultFontSize = 30;
 
-    // ---- 窗口位置与尺寸（NaN 表示"尚未确定"，首次运行会摆到屏幕底部居中）----
-    public double Left { get; set; } = double.NaN;
-    public double Top { get; set; } = double.NaN;
+    // ---- 窗口位置（null 表示"尚未确定"，首次运行会摆到屏幕底部居中）----
+    // 刻意用可空 double 而不是 NaN：System.Text.Json 默认无法把 NaN 写成合法 JSON，
+    // 会让"位置还没确定时的保存"直接抛异常并静默失败。
+    public double? Left { get; set; }
+    public double? Top { get; set; }
 
     /// <summary>单位是 WPF 的 DIP（设备无关像素），不是物理像素。</summary>
     public double Width { get; set; } = DefaultWidth;
@@ -32,17 +34,14 @@ public sealed class AppSettings
     // ---- 外观 ----
     public double FontSize { get; set; } = DefaultFontSize;
     public double WindowOpacity { get; set; } = 1.0;
-    public bool ShowBackdrop { get; set; } = true;
-    public double BackdropOpacity { get; set; } = 0.30;
 
-    // ---- 行为 ----
-    /// <summary>鼠标穿透：开启后鼠标事件直接穿过浮窗，打游戏时不会挡住操作。默认关闭以便首次运行能拖动。</summary>
-    public bool ClickThrough { get; set; }
-
-    /// <summary>锁定位置：禁止拖动。</summary>
+    /// <summary>
+    /// 锁定状态。锁定 = 同时开启鼠标穿透（鼠标事件直接穿过浮窗），解锁 = 取消穿透。
+    /// 这是唯一的穿透开关，不再单独提供 ClickThrough 设置。
+    /// </summary>
     public bool Locked { get; set; }
 
-    /// <summary>是否显示翻译。单行浮窗默认不显示，需要时从托盘菜单打开。</summary>
+    /// <summary>是否显示翻译。单行浮窗默认不显示。</summary>
     public bool ShowTranslation { get; set; }
 
     /// <summary>QQ 音乐没有媒体会话时完全不显示浮窗（例如只有浏览器在放 B 站视频）。</summary>
@@ -82,7 +81,7 @@ public sealed class AppSettings
         return new AppSettings { SettingsVersion = CurrentVersion };
     }
 
-    /// <summary>按版本补齐或重置字段；老文件里已删除的字段会被忽略。</summary>
+    /// <summary>按版本补齐或重置字段；老文件里已删除的字段（如 ClickThrough / ShowBackdrop）会被忽略。</summary>
     private static void Migrate(AppSettings settings)
     {
         int from = settings.SettingsVersion;
@@ -94,12 +93,15 @@ public sealed class AppSettings
             settings.Height = DefaultHeight;
             settings.FontSize = DefaultFontSize;
             settings.ShowTranslation = false;
-            settings.ShowBackdrop = true;
-            settings.BackdropOpacity = 0.30;
+            settings.Left = null;
+            settings.Top = null;
+        }
 
-            // 尺寸变了，位置重新按"底部居中"算一次，免得小窗口停在别扭的地方
-            settings.Left = double.NaN;
-            settings.Top = double.NaN;
+        if (from < 3)
+        {
+            // v3：锁定与鼠标穿透合并成一个概念，背景板整体移除。
+            // 旧值语义不同，统一重置为"未锁定"，保证一启动就能拖动窗口。
+            settings.Locked = false;
         }
 
         if (from < CurrentVersion)
@@ -130,7 +132,6 @@ public sealed class AppSettings
         Height = Clamp(Height, 60, 2000, DefaultHeight);
         FontSize = Clamp(FontSize, 12, 120, DefaultFontSize);
         WindowOpacity = Clamp(WindowOpacity, 0.15, 1.0, 1.0);
-        BackdropOpacity = Clamp(BackdropOpacity, 0.0, 1.0, 0.30);
         CoverSize = CoverSize is 300 or 500 or 800 ? CoverSize : 800;
         LyricOffsetMs = (int)Clamp(LyricOffsetMs, -10000, 10000, 0);
     }
