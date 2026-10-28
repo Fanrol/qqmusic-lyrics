@@ -11,12 +11,27 @@ namespace QQMusicLyrics.Lyrics;
 /// 实测发现：smartbox 搜索把"歌名+歌手"一起作为关键词时反而常常 0 命中
 /// （例如 "半抹烟熏 封茗囧菌" → 0 条，只搜 "半抹烟熏" → 1 条）。
 /// 所以策略是：只用歌名搜，拿到候选后用歌手名打分挑出最合适的那条。
+///
+/// 注意阈值很松：歌名完全一致就能拿到 0.65，单靠这一项就过 0.50 的线。
+/// 也就是说**歌手完全不对也会被接受**（真实踩过的坑：Monster 被匹配成 BIGBANG 的韩语版）。
+/// 因此上层不能"第一条及格的就定案"，必须把所有关键词的候选合起来比一遍。
 /// </summary>
 public static class MatchScorer
 {
     private const double AcceptThreshold = 0.50;
 
+    /// <summary>一次评估的结果：选中的候选（不接受时为 null）与各分项得分，便于上层比较不同关键词的结果。</summary>
+    public readonly record struct MatchResult(
+        SongCandidate? Candidate, double Score, double TitleScore, double ArtistScore)
+    {
+        public bool Accepted => Candidate is not null;
+    }
+
     public static SongCandidate? Pick(TrackInfo track, IEnumerable<SongCandidate> candidates)
+        => Evaluate(track, candidates).Candidate;
+
+    /// <summary>从候选里挑出最合适的一条，并返回各项得分（不接受时 Candidate 为 null）。</summary>
+    public static MatchResult Evaluate(TrackInfo track, IEnumerable<SongCandidate> candidates)
     {
         var titleVariants = BuildTitleVariants(track.Title);
         var artists = SplitArtists(track.Artist);
@@ -55,16 +70,16 @@ public static class MatchScorer
 
         if (best is null || bestScore < AcceptThreshold)
         {
-            return null;
+            return new MatchResult(null, bestScore, bestTitleScore, bestArtistScore);
         }
 
         // 标题对不上却因为歌手相同而"混进来"的情况要挡掉
         if (bestTitleScore < 0.45)
         {
-            return null;
+            return new MatchResult(null, bestScore, bestTitleScore, bestArtistScore);
         }
 
-        return best;
+        return new MatchResult(best, bestScore, bestTitleScore, bestArtistScore);
     }
 
     /// <summary>把歌词缓存键/搜索关键词统一成"去掉括号补充说明"的主标题。</summary>

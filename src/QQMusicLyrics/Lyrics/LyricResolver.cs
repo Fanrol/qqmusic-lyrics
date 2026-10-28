@@ -90,34 +90,56 @@ public sealed class LyricResolver : IDisposable
         return Build(entry, lines);
     }
 
-    /// <summary>按关键词优先级逐个搜索，一旦能挑出满意候选就立刻停下，避免多余请求。</summary>
+    /// <summary>
+    /// 按关键词优先级逐个搜索，**把所有关键词的候选合起来取全局最优**。
+    ///
+    /// 这里曾经是"第一个关键词能挑出及格候选就停下"，结果踩了坑：
+    /// 播放 "Monster - Alan Walker/Emyrson Flora" 时，只搜 "Monster" 会返回 BIGBANG / EXO / Shawn Mendes 等
+    /// 同名歌（歌手分接近 0），但综合分 0.65 以上就"及格"了，于是直接定案，根本没去搜
+    /// "Monster Alan Walker" —— 而那个关键词的第一条就是完美匹配（1.000）。
+    ///
+    /// 现在每个关键词搜完都把"目前所有候选"重新评一遍并保留最高分；
+    /// 分数已经接近满分（>= <see cref="ConfidentScore"/>）才提前结束，避免无谓请求。
+    /// </summary>
     private async Task<SongCandidate?> FindBestMatchAsync(TrackInfo track, CancellationToken token)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var accumulated = new List<SongCandidate>();
+
+        SongCandidate? best = null;
+        double bestScore = 0;
 
         foreach (string keyword in MatchScorer.BuildSearchKeywords(track.Title, track.Artist))
         {
             token.ThrowIfCancellationRequested();
 
             var found = await _client.SearchAsync(keyword, token).ConfigureAwait(false);
+            if (found.Count == 0) continue;
+
             foreach (var candidate in found)
             {
                 if (seen.Add(candidate.Mid)) accumulated.Add(candidate);
             }
 
-            if (found.Count == 0) continue;
-
-            var pick = MatchScorer.Pick(track, accumulated);
-            if (pick is not null)
+            var result = MatchScorer.Evaluate(track, accumulated);
+            if (result.Accepted && result.Score > bestScore)
             {
-                Log.Info($"匹配到候选: 关键词='{keyword}' -> '{pick.Name} - {pick.Singer}' (mid={pick.Mid})");
-                return pick;
+                best = result.Candidate;
+                bestScore = result.Score;
+                Log.Info($"候选更新: 关键词='{keyword}' -> '{result.Candidate!.Name} - {result.Candidate.Singer}' " +
+                         $"(综合 {result.Score:0.000} = 标题 {result.TitleScore:0.000} + 歌手 {result.ArtistScore:0.000}, " +
+                         $"mid={result.Candidate.Mid})");
             }
+
+            // 已经接近满分，再搜也不会有更好的了
+            if (bestScore >= ConfidentScore) break;
         }
 
-        return null;
+        return best;
     }
+
+    /// <summary>分数到这个程度就够了：继续换关键词搜也不太可能再提高。</summary>
+    private const double ConfidentScore = 0.95;
 
     private async Task EnsureCoverAsync(LyricCacheEntry entry, CancellationToken token)
     {

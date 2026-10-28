@@ -18,22 +18,38 @@ namespace QQMusicLyrics.SelfTest;
 ///
 /// 用法：dotnet run --project tests\QQMusicLyrics.SelfTest
 ///      dotnet run --project tests\QQMusicLyrics.SelfTest -- --test-playback   （额外测试会真正暂停/恢复你的播放）
+///      dotnet run --project tests\QQMusicLyrics.SelfTest -- --match "Monster|Alan Walker/Emyrson Flora"
+///                                                             （用指定的曲目跑补全流程，不依赖当前在播什么）
 /// </summary>
 internal static class Program
 {
     private static int _passed;
     private static int _failed;
     private static bool _testPlayback;
+    private static TrackInfo _forcedTrack = null;
 
     private static async Task<int> Main(string[] args)
     {
         Console.OutputEncoding = Encoding.UTF8;
         _testPlayback = args.Any(a => a.Equals("--test-playback", StringComparison.OrdinalIgnoreCase));
 
+        int matchIndex = Array.FindIndex(args, a => a.Equals("--match", StringComparison.OrdinalIgnoreCase));
+        if (matchIndex >= 0 && matchIndex + 1 < args.Length)
+        {
+            string[] parts = args[matchIndex + 1].Split('|');
+            string title = parts[0].Trim();
+            string artist = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+            if (title.Length > 0) _forcedTrack = new TrackInfo(title, artist, string.Empty);
+        }
+
         Console.WriteLine("==================== 集成自测 ====================");
         Console.WriteLine(_testPlayback
             ? "（含播放控制测试：会短暂暂停再恢复你的播放）"
             : "（未启用播放控制测试；加 --test-playback 可启用）");
+        if (_forcedTrack is not null)
+        {
+            Console.WriteLine($"（实况匹配固定用指定曲目：{_forcedTrack.DisplayName}）");
+        }
         Console.WriteLine();
 
         TestLrcParser();
@@ -189,6 +205,30 @@ internal static class Program
         Check("搜索关键词优先只用歌名",
             MatchScorer.BuildSearchKeywords("雨是神的烟花 (我的爱不值一提吗)", "Nyxx.")[0] == "雨是神的烟花");
         Check("StripBrackets 处理全角括号", MatchScorer.StripBrackets("歌名（说明）") == "歌名");
+
+        // 回归：真实踩过的坑。搜索 "Monster" 只会返回这些同名歌，歌手全对不上；
+        // 如果只看"歌名全等"就定案，就会选中 BIGBANG 那首韩语歌。
+        var monster = new List<SongCandidate>
+        {
+            new("k1", "Monsters", "Katie Sky"),
+            new("k2", "Monster", "BIGBANG"),
+            new("k3", "Monster", "Shawn Mendes/Justin Bieber"),
+            new("k4", "Monster", "EXO"),
+            new("k5", "Monster", "Alan Walker/Emyrson Flora"),
+        };
+        var monsterTrack = new TrackInfo("Monster", "Alan Walker/Emyrson Flora", "");
+        Check("同名不同歌手时选歌手对得上的那条（Monster 回归）",
+            MatchScorer.Pick(monsterTrack, monster)?.Mid == "k5",
+            MatchScorer.Pick(monsterTrack, monster) is { } p ? $"{p.Name} - {p.Singer}" : "<null>");
+
+        // 候选池里没有正确那条时，也说明为什么"只看第一个关键词"不可靠
+        var withoutRightOne = monster.Where(c => c.Mid != "k5").ToList();
+        Check("候选池缺正确曲目时会挑到同名但歌手不对的（因此必须多关键词比对）",
+            MatchScorer.Pick(monsterTrack, withoutRightOne)?.Mid == "k2");
+
+        Check("Evaluate 给出可用于比较各关键词的综合分",
+            MatchScorer.Evaluate(monsterTrack, monster).Score >= 0.99,
+            MatchScorer.Evaluate(monsterTrack, monster).Score.ToString("0.000"));
     }
 
     // ---------------- 5. QQ 接口 ----------------
@@ -230,42 +270,56 @@ internal static class Program
     private static async Task TestMatchAgainstLiveSearchAsync()
     {
         Console.WriteLine();
-        Console.WriteLine("---- 6. 实况匹配（拿 QQ 音乐当前在播的歌跑真实搜索）----");
+        Console.WriteLine("---- 6. 实况匹配（跑完整补全流程：搜索 → 打分 → 取歌词）----");
 
-        using var media = new SmtcMediaService();
-        await media.StartAsync();
-        await Task.Delay(1200);
+        TrackInfo track;
+        if (_forcedTrack is not null)
+        {
+            track = _forcedTrack;
+            Console.WriteLine("    （使用 --match 指定的曲目，不读 SMTC）");
+        }
+        else
+        {
+            using var media = new SmtcMediaService();
+            await media.StartAsync();
+            await Task.Delay(1200);
+            track = media.Current;
+        }
 
-        TrackInfo track = media.Current;
-        Check("能读到 QQ 音乐当前曲目", !track.IsEmpty, track.DisplayName);
+        Check("有可用的曲目", !track.IsEmpty, track.DisplayName);
         if (track.IsEmpty)
         {
-            Console.WriteLine("    （QQ 音乐当前没有会话，跳过实况匹配；请先播放一首歌再跑）");
+            Console.WriteLine("    （QQ 音乐当前没有会话，跳过；请先播放一首歌，或用 --match \"歌名|歌手\" 指定）");
             return;
         }
 
-        using var client = new QQMusicClient();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        // 直接跑真实的补全器，而不是在测试里把搜索循环再抄一遍
+        using var resolver = new LyricResolver(800);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
 
-        var all = new List<SongCandidate>();
-        SongCandidate match = null;
-        string usedKeyword = "";
-        foreach (string keyword in MatchScorer.BuildSearchKeywords(track.Title, track.Artist))
+        ResolvedLyrics resolved;
+        try
         {
-            all.AddRange(await client.SearchAsync(keyword, cts.Token));
-            match = MatchScorer.Pick(track, all);
-            if (match is not null) { usedKeyword = keyword; break; }
+            resolved = await resolver.ResolveAsync(track, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            Check("补全流程没有抛异常", false, ex.GetType().Name + ": " + ex.Message);
+            return;
         }
 
-        Check("实况曲目能匹配到候选", match is not null,
-            match is null ? "<null>" : $"关键词='{usedKeyword}' -> {match.Name} - {match.Singer}");
+        Check("能匹配到曲目", resolved.Found,
+            resolved.Found ? $"{resolved.MatchedTitle} - {resolved.MatchedArtist}" : "未匹配");
+        if (!resolved.Found) return;
 
-        if (match is not null)
-        {
-            var lyric = await client.GetLyricAsync(match.Mid, cts.Token);
-            var parsed = lyric is null ? new List<LyricLine>() : LrcParser.Parse(lyric.Lyric, lyric.Translation);
-            Check("实况曲目能拿到歌词", parsed.Count > 0, $"{parsed.Count} 行");
-        }
+        Check("能拿到带时间轴的歌词", resolved.Lines.Count > 0, $"{resolved.Lines.Count} 行");
+
+        // 歌手是否对得上只作为提示打印：有些歌确实只有翻唱版本，不该判失败
+        string originalFirst = MatchScorer.Normalize(track.Artist.Split('/')[0]);
+        bool sameArtist = originalFirst.Length > 0 &&
+            MatchScorer.Normalize(resolved.MatchedArtist).Contains(originalFirst, StringComparison.Ordinal);
+        Console.WriteLine($"    （歌手核对：原曲 '{track.Artist}' vs 匹配 '{resolved.MatchedArtist}' → " +
+                          (sameArtist ? "一致" : "不一致，可能是同名歌选错，或这首歌只有翻唱") + "）");
     }
 
     // ---------------- 7. SMTC 位置与外推 ----------------
@@ -287,17 +341,25 @@ internal static class Program
 
         Check("时长已知", media.Duration > TimeSpan.Zero, media.Duration.ToString());
 
-        TimeSpan p1 = media.CurrentPosition;
-        var sw = System.Diagnostics.Stopwatch.StartNew();
-        await Task.Delay(3000);
-        TimeSpan p2 = media.CurrentPosition;
-        sw.Stop();
+        if (!media.IsPlaying)
+        {
+            // 暂停/停止时位置本来就不会推进，这里不该判失败
+            Console.WriteLine("    （当前是暂停/停止状态，位置本就不推进，跳过连续性检查）");
+        }
+        else
+        {
+            TimeSpan p1 = media.CurrentPosition;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            await Task.Delay(3000);
+            TimeSpan p2 = media.CurrentPosition;
+            sw.Stop();
 
-        double advanced = (p2 - p1).TotalSeconds;
-        double wall = sw.Elapsed.TotalSeconds;
-        Console.WriteLine($"      位置 {p1:mm\\:ss\\.fff} -> {p2:mm\\:ss\\.fff}，真实经过 {wall:F2}s，推进 {advanced:F2}s");
-        Check("位置按真实时间连续推进（误差 < 0.5s）", Math.Abs(advanced - wall) < 0.5,
-            $"差值 {Math.Abs(advanced - wall):F3}s");
+            double advanced = (p2 - p1).TotalSeconds;
+            double wall = sw.Elapsed.TotalSeconds;
+            Console.WriteLine($"      位置 {p1:mm\\:ss\\.fff} -> {p2:mm\\:ss\\.fff}，真实经过 {wall:F2}s，推进 {advanced:F2}s");
+            Check("位置按真实时间连续推进（误差 < 0.5s）", Math.Abs(advanced - wall) < 0.5,
+                $"差值 {Math.Abs(advanced - wall):F3}s");
+        }
 
         if (!_testPlayback)
         {
