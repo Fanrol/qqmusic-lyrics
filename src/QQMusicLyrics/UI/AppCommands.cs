@@ -48,7 +48,7 @@ public sealed class AppCommands
         _settings.Save();
         _window.ApplySettings(); // 这里会同步设置窗口的鼠标穿透样式
         Infra.Log.Info(_settings.Locked
-            ? "已锁定：开启鼠标穿透（此时只能用托盘菜单解锁）"
+            ? "已锁定：整窗鼠标穿透（把鼠标移到锁图标上可直接解锁）"
             : "已解锁：关闭鼠标穿透");
         StateChanged?.Invoke(this, EventArgs.Empty);
     }

@@ -59,6 +59,9 @@ public partial class LyricsWindow : Window
     private bool _lockButtonShown;
     private DateTime _cursorLeftAt = DateTime.UtcNow;
 
+    /// <summary>光标是否落在锁定键的点击区内（只有这块区域在锁定时不穿透）。</summary>
+    private bool _cursorOverLockZone;
+
     /// <summary>请求弹出右键菜单（由托盘统一提供菜单，避免两套菜单不一致）。</summary>
     public event EventHandler? ContextMenuRequested;
 
@@ -119,7 +122,7 @@ public partial class LyricsWindow : Window
     {
         _handle = new WindowInteropHelper(this).Handle;
         NativeMethods.ApplyOverlayStyles(_handle);
-        NativeMethods.SetClickThrough(_handle, _settings.Locked);
+        UpdateClickThrough();
     }
 
     // ---------------- 外观 ----------------
@@ -134,12 +137,7 @@ public partial class LyricsWindow : Window
         StatusLine.FontSize = Math.Max(MinAutoFontSize, _settings.FontSize * 0.62);
 
         UpdateLockAppearance();
-
-        // 锁定 = 鼠标穿透
-        if (_handle != IntPtr.Zero)
-        {
-            NativeMethods.SetClickThrough(_handle, _settings.Locked);
-        }
+        UpdateClickThrough();
 
         // 让字号、翻译开关这类改动立刻反映到画面上
         if (_showingLyrics && _lineIndex >= 0)
@@ -148,6 +146,33 @@ public partial class LyricsWindow : Window
         }
 
         UpdateVisibility();
+    }
+
+    /// <summary>
+    /// 鼠标穿透只作用于"除锁定键以外"的区域。
+    ///
+    /// WS_EX_TRANSPARENT 是整窗级别的，没法只对一部分生效，所以这里按光标位置动态切换：
+    ///   - 未锁定：整窗可交互（能拖动、能右键）
+    ///   - 锁定 + 光标不在锁定键上：整窗穿透
+    ///   - 锁定 + 光标移到锁定键的点击区：临时取消穿透，让点击能落到图标上（点它可以解锁）
+    /// 判定用轮询而不是鼠标事件，因为穿透时窗口根本收不到事件。
+    /// </summary>
+    private void UpdateClickThrough()
+    {
+        if (_handle == IntPtr.Zero) return; // 窗口还没创建
+
+        bool clickThrough = _settings.Locked && !_cursorOverLockZone;
+        NativeMethods.SetClickThrough(_handle, clickThrough);
+    }
+
+    /// <summary>锁定键的点击区：比图标本身大一圈，留出余量，避免"移过去的一瞬间还没取消穿透"。</summary>
+    private bool IsInLockZone(double localX, double localY)
+    {
+        const double halfWidth = 20;     // 图标宽 24，左右各多留 8
+        const double zoneBottom = 38;    // 图标上下 6..30，再留一点余量
+
+        return Math.Abs(localX - Width / 2.0) <= halfWidth &&
+               localY >= 0 && localY <= zoneBottom;
     }
 
     /// <summary>根据锁定状态切换锁图标：未锁定显示开着的锁，锁定显示关着的锁。</summary>
@@ -228,6 +253,8 @@ public partial class LyricsWindow : Window
             {
                 _lineIndex = -1;       // 重新显示时强制重画
                 _cursorInside = false; // 悬停状态重新判断
+                _cursorOverLockZone = false;
+                UpdateClickThrough();
             }
         }
     }
@@ -276,8 +303,17 @@ public partial class LyricsWindow : Window
     {
         if (!TryGetMousePositionInDip(out Point cursor)) return;
 
-        bool inside = cursor.X >= Left && cursor.X <= Left + Width &&
-                      cursor.Y >= Top && cursor.Y <= Top + Height;
+        double localX = cursor.X - Left;
+        double localY = cursor.Y - Top;
+        bool inside = localX >= 0 && localX <= Width && localY >= 0 && localY <= Height;
+
+        // 锁定键的点击区是否被光标覆盖 —— 决定这一小块要不要取消穿透
+        bool overLockZone = inside && IsInLockZone(localX, localY);
+        if (overLockZone != _cursorOverLockZone)
+        {
+            _cursorOverLockZone = overLockZone;
+            UpdateClickThrough();
+        }
 
         if (inside)
         {
