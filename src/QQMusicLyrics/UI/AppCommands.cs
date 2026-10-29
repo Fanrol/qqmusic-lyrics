@@ -57,5 +57,35 @@ public sealed class AppCommands
 
     public void DecreaseFont() => _window.AdjustFontSize(-2);
 
+    /// <summary>显示/隐藏之间切换（托盘菜单、浮窗右键、全局快捷键共用）。</summary>
+    public void ToggleVisibility()
+    {
+        if (IsVisible) HideWindow();
+        else ShowWindow();
+    }
+
+    private SettingsWindow? _settingsWindow;
+
+    /// <summary>打开设置窗口（已经开着就把它提到前面）。</summary>
+    public void OpenSettings()
+    {
+        if (_settingsWindow is { IsVisible: true })
+        {
+            _settingsWindow.Activate();
+            return;
+        }
+
+        var window = new SettingsWindow(_settings);
+        _settingsWindow = window;
+        window.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(_settingsWindow, window)) _settingsWindow = null;
+        };
+
+        // 快捷键改了就立刻重新注册，不用重启
+        window.HotkeyChanged += (_, gesture) => _window.ApplyHotkey(gesture);
+        window.Show();
+    }
+
     public void Exit() => _exit();
 }

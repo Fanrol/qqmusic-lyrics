@@ -77,6 +77,42 @@ internal static class Glyphs
         return bitmap;
     }
 
+    /// <summary>
+    /// 菜单图标：齿轮（设置）。设计坐标 24×24：外圈 r=6.4、内圈 r=2.6，再加 8 根向外的齿。
+    /// </summary>
+    public static Bitmap CreateGearBitmap(Color color, int size)
+    {
+        var bitmap = NewBitmap(size);
+        using var graphics = Graphics.FromImage(bitmap);
+        Prepare(graphics);
+        using var pen = NewPen(color, size);
+
+        float scale = size / 24f;
+        const float center = 12f;
+        const float outerRadius = 6.2f;
+        const float innerRadius = 2.6f;
+        const float toothRadius = 8.4f;
+
+        graphics.DrawEllipse(pen,
+            (center - outerRadius) * scale, (center - outerRadius) * scale,
+            outerRadius * 2 * scale, outerRadius * 2 * scale);
+        graphics.DrawEllipse(pen,
+            (center - innerRadius) * scale, (center - innerRadius) * scale,
+            innerRadius * 2 * scale, innerRadius * 2 * scale);
+
+        for (int i = 0; i < 8; i++)
+        {
+            double angle = i * Math.PI / 4 + Math.PI / 8;
+            float x1 = center + (float)(outerRadius * Math.Cos(angle));
+            float y1 = center + (float)(outerRadius * Math.Sin(angle));
+            float x2 = center + (float)(toothRadius * Math.Cos(angle));
+            float y2 = center + (float)(toothRadius * Math.Sin(angle));
+            graphics.DrawLine(pen, x1 * scale, y1 * scale, x2 * scale, y2 * scale);
+        }
+
+        return bitmap;
+    }
+
     private static Bitmap NewBitmap(int size) => new(size, size, PixelFormat.Format32bppArgb);
 
     private static void Prepare(Graphics graphics)

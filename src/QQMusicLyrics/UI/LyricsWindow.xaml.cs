@@ -159,6 +159,41 @@ public partial class LyricsWindow : Window
         _handle = new WindowInteropHelper(this).Handle;
         NativeMethods.ApplyOverlayStyles(_handle);
         UpdateClickThrough();
+
+        // 全局热键靠窗口消息接收，需要挂一个消息钩子
+        HwndSource.FromHwnd(_handle)?.AddHook(WndProcHook);
+        ApplyHotkey(HotkeyGesture.ParseOrDefault(_settings.ToggleHotkey));
+    }
+
+    /// <summary>全局快捷键被按下。</summary>
+    public event EventHandler? HotkeyPressed;
+
+    private const int HotkeyId = 0x5157;
+
+    private IntPtr WndProcHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (msg == NativeMethods.WM_HOTKEY && wParam.ToInt32() == HotkeyId)
+        {
+            handled = true;
+            HotkeyPressed?.Invoke(this, EventArgs.Empty);
+        }
+        return IntPtr.Zero;
+    }
+
+    /// <summary>重新注册「显示/隐藏」的全局快捷键。注册失败通常是被别的程序占用。</summary>
+    public void ApplyHotkey(HotkeyGesture gesture)
+    {
+        if (_handle == IntPtr.Zero) return;
+
+        NativeMethods.UnregisterHotKeyById(_handle, HotkeyId);
+        if (gesture.IsEmpty) return;
+
+        bool ok = NativeMethods.TryRegisterHotKey(
+            _handle, HotkeyId, gesture.NativeModifiers, gesture.NativeVirtualKey);
+
+        Log.Info(ok
+            ? $"已注册全局快捷键: {gesture.Display}"
+            : $"注册全局快捷键失败（可能被别的程序占用）: {gesture.Display}");
     }
 
     // ---------------- 外观 ----------------

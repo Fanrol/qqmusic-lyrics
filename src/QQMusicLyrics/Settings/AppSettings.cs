@@ -57,6 +57,9 @@ public sealed class AppSettings
 
     public bool AutoStart { get; set; }
 
+    /// <summary>「显示/隐藏」的全局快捷键，持久化形式如 "Alt+C"。</summary>
+    public string ToggleHotkey { get; set; } = "Alt+C";
+
     /// <summary>歌词整体偏移（毫秒），**正数表示歌词提前**。</summary>
     public int LyricOffsetMs { get; set; } = DefaultLyricOffsetMs;
 

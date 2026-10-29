@@ -70,6 +70,9 @@ public partial class App : Application
         // 浮窗上的锁定键与菜单里的"锁定/解锁"走同一条命令
         _window.LockToggleRequested += (_, _) => _commands.ToggleLocked();
 
+        // 全局快捷键（默认 Alt+C）切换显示/隐藏
+        _window.HotkeyPressed += (_, _) => _commands.ToggleVisibility();
+
         _media.TrackChanged += OnTrackChanged;
 
         _window.Show();

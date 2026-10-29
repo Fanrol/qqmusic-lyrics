@@ -24,7 +24,7 @@ public sealed class TrayIcon : IDisposable
     private static readonly Color MenuGlyphColor = Color.FromArgb(60, 60, 60);
 
     private readonly NotifyIcon _notifyIcon;
-    private readonly ContextMenuStrip _menu;
+    private readonly StickyContextMenu _menu;
     private readonly AppCommands _commands;
     private readonly Icon _icon;
 
@@ -33,12 +33,14 @@ public sealed class TrayIcon : IDisposable
     private readonly ToolStripMenuItem _lockItem = new("锁定");
     private readonly ToolStripMenuItem _fontPlusItem = new("字号 +");
     private readonly ToolStripMenuItem _fontMinusItem = new("字号 −");
+    private readonly ToolStripMenuItem _settingsItem = new("设置");
     private readonly ToolStripMenuItem _exitItem = new("退出");
 
     private readonly Bitmap _lockOpenImage;
     private readonly Bitmap _lockClosedImage;
     private readonly Bitmap _plusImage;
     private readonly Bitmap _minusImage;
+    private readonly Bitmap _gearImage;
 
     public TrayIcon(AppCommands commands)
     {
@@ -49,8 +51,9 @@ public sealed class TrayIcon : IDisposable
         _lockClosedImage = Glyphs.CreateLockBitmap(locked: true, MenuGlyphColor, 32);
         _plusImage = Glyphs.CreatePlusBitmap(MenuGlyphColor, 32);
         _minusImage = Glyphs.CreateMinusBitmap(MenuGlyphColor, 32);
+        _gearImage = Glyphs.CreateGearBitmap(MenuGlyphColor, 32);
 
-        _menu = new ContextMenuStrip
+        _menu = new StickyContextMenu
         {
             ShowImageMargin = true, // 给左侧图标留出位置
             Font = new Font("Microsoft YaHei UI", 9f),
@@ -70,24 +73,99 @@ public sealed class TrayIcon : IDisposable
         SyncMenuState();
     }
 
+    /// <summary>
+    /// 点「字号 +」「字号 −」之后菜单**不关闭**，方便连续点；其余菜单项照旧，点完就关。
+    /// 判定依据是"点击位置落在带 StickyTag 的项上"，比在 Click 里设标志更可靠
+    /// （实测 ToolStrip 的 Closing 早于 Click，用标志会来不及）。
+    /// </summary>
+    private sealed class StickyContextMenu : ContextMenuStrip
+    {
+        public const string StickyTag = "sticky";
+
+        protected override void OnClosing(ToolStripDropDownClosingEventArgs e)
+        {
+            if (e.CloseReason == ToolStripDropDownCloseReason.ItemClicked && IsOverStickyItem())
+            {
+                e.Cancel = true;
+                return;
+            }
+            base.OnClosing(e);
+        }
+
+        private bool IsOverStickyItem()
+        {
+            Point cursor = PointToClient(Cursor.Position);
+            foreach (ToolStripItem item in Items)
+            {
+                if (item is ToolStripMenuItem menuItem &&
+                    (menuItem.Tag as string) == StickyTag &&
+                    menuItem.Bounds.Contains(cursor))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 让菜单项的文字在整行里垂直居中。
+    /// 默认实现会把文字贴在内容区顶部，实测比行中心高约 5.7px（图标却是居中的），
+    /// 所以这里直接把文字的绘制矩形挪到行的垂直中心。
+    /// </summary>
+    private sealed class CenteredMenuRenderer : ToolStripProfessionalRenderer
+    {
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            if (e.Item is ToolStripMenuItem)
+            {
+                Rectangle bounds = e.Item.Bounds;
+                Size textSize = TextRenderer.MeasureText(e.Text ?? string.Empty, e.TextFont);
+
+                Rectangle rect = e.TextRectangle;
+                int top = bounds.Top + (bounds.Height - textSize.Height) / 2;
+                e.TextRectangle = new Rectangle(rect.X, top, rect.Width, textSize.Height);
+                e.TextFormat |= TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine;
+            }
+
+            base.OnRenderItemText(e);
+        }
+    }
+
     private void BuildMenu()
     {
-        _showItem.Padding = ItemPadding;
-        _hideItem.Padding = ItemPadding;
-        _lockItem.Padding = ItemPadding;
-        _fontPlusItem.Padding = ItemPadding;
-        _fontMinusItem.Padding = ItemPadding;
-        _exitItem.Padding = ItemPadding;
+        // 固定尺寸 + MiddleLeft：保证文字与左侧图标在同一水平中线上
+        foreach (ToolStripMenuItem item in new[]
+                 {
+                     _showItem, _hideItem, _lockItem, _fontPlusItem,
+                     _fontMinusItem, _settingsItem, _exitItem,
+                 })
+        {
+            item.AutoSize = false;
+            item.Width = 184;
+            // 行高刻意贴近"文字高度 + 上下留白"：默认实现把文字按内容区顶部对齐，
+            // 行高多出来的部分全落在文字下面，看起来就偏上了（实测差约 5.7px）。
+            // 把高度收到 29 之后，内容区高度≈文字高度，文字自然就居中、和图标对齐了。
+            item.Height = 29;
+            item.TextAlign = ContentAlignment.MiddleLeft;
+            item.ImageAlign = ContentAlignment.MiddleLeft;
+            item.Padding = ItemPadding;
+        }
 
+        // 字号项：点完保留菜单（靠 Tag 让菜单自己判断）
         _showItem.Click += (_, _) => _commands.ShowWindow();
         _hideItem.Click += (_, _) => _commands.HideWindow();
         _lockItem.Click += (_, _) => _commands.ToggleLocked();
+        _fontPlusItem.Tag = StickyContextMenu.StickyTag;
+        _fontMinusItem.Tag = StickyContextMenu.StickyTag;
         _fontPlusItem.Click += (_, _) => _commands.IncreaseFont();
         _fontMinusItem.Click += (_, _) => _commands.DecreaseFont();
+        _settingsItem.Click += (_, _) => _commands.OpenSettings();
         _exitItem.Click += (_, _) => _commands.Exit();
 
         _fontPlusItem.Image = _plusImage;
         _fontMinusItem.Image = _minusImage;
+        _settingsItem.Image = _gearImage;
 
         _menu.Items.Add(_showItem);
         _menu.Items.Add(_hideItem);
@@ -95,6 +173,7 @@ public sealed class TrayIcon : IDisposable
         _menu.Items.Add(_fontPlusItem);
         _menu.Items.Add(_fontMinusItem);
         _menu.Items.Add(new ToolStripSeparator());
+        _menu.Items.Add(_settingsItem);
         _menu.Items.Add(_exitItem);
 
         // 每次弹出前刷新锁定项的文案与图标
@@ -185,5 +264,6 @@ public sealed class TrayIcon : IDisposable
         _lockClosedImage.Dispose();
         _plusImage.Dispose();
         _minusImage.Dispose();
+        _gearImage.Dispose();
     }
 }

@@ -35,11 +35,30 @@ internal static class NativeMethods
     [DllImport("user32.dll")]
     private static extern bool GetCursorPos(out POINT point);
 
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+
+    /// <summary>热键被按下时系统发来的消息。</summary>
+    public const int WM_HOTKEY = 0x0312;
+
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT
     {
         public int X;
         public int Y;
+    }
+
+    /// <summary>注册全局热键。返回 false 表示被别的程序占用了。</summary>
+    public static bool TryRegisterHotKey(IntPtr hwnd, int id, uint modifiers, uint virtualKey)
+        => hwnd != IntPtr.Zero && RegisterHotKey(hwnd, id, modifiers, virtualKey);
+
+    /// <summary>注销全局热键。</summary>
+    public static void UnregisterHotKeyById(IntPtr hwnd, int id)
+    {
+        if (hwnd != IntPtr.Zero) UnregisterHotKey(hwnd, id);
     }
 
     /// <summary>
