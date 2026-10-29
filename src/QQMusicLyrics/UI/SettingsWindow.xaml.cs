@@ -56,7 +56,7 @@ public partial class SettingsWindow : Window
     /// <summary>任务栏/标题里显示的应用图标，和托盘图标同一套画法。</summary>
     private static ImageSource CreateWindowIcon()
     {
-        using var bitmap = Glyphs.CreateAppIconBitmap(32);
+        using var bitmap = Glyphs.CreateAppIconBitmap(256);
         using var stream = new MemoryStream();
         bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
         stream.Position = 0;

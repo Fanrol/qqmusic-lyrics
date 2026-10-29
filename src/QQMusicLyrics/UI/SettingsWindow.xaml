@@ -9,6 +9,7 @@
         ResizeMode="NoResize"
         ShowInTaskbar="True"
         WindowStartupLocation="CenterScreen"
+        FocusVisualStyle="{x:Null}"
         FontFamily="Microsoft YaHei UI"
         FontSize="13"
         UseLayoutRounding="True"
@@ -25,8 +26,6 @@
             <!-- 标题栏（可拖动） -->
             <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent"
                   MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
-                <!-- 标题栏底部分隔线，贯通到最右边 -->
-                <Border VerticalAlignment="Bottom" Height="1" Background="#DCDCDC" />
 
                 <TextBlock Text="设置" Margin="16,0,0,0" VerticalAlignment="Center"
                            Foreground="#3A3A3A" FontSize="13" />
@@ -106,6 +105,9 @@
                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
                 </StackPanel>
+
+                <!-- 标题栏底部分隔线：放在按钮之后，才不会被悬停的白底盖住 -->
+                <Border VerticalAlignment="Bottom" Height="1" Background="#DCDCDC" />
             </Grid>
 
             <!-- 左侧大类 + 右侧内容 -->
@@ -144,6 +146,7 @@
                                     Background="White"
                                     BorderBrush="Black" BorderThickness="1"
                                     Cursor="Hand"
+                                    FocusVisualStyle="{x:Null}"
                                     MouseLeftButtonDown="HotkeyBox_MouseLeftButtonDown">
                                 <TextBlock x:Name="HotkeyText" Text="Alt + C"
                                            HorizontalAlignment="Center" VerticalAlignment="Center"
