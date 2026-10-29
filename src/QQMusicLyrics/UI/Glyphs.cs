@@ -78,8 +78,38 @@ internal static class Glyphs
     }
 
     /// <summary>
-    /// 菜单图标：齿轮（设置）。设计坐标 24×24：外圈 r=6.4、内圈 r=2.6，再加 8 根向外的齿。
+    /// 应用图标（绿底 + ♪），托盘图标和设置窗口共用同一套画法。
     /// </summary>
+    public static Bitmap CreateAppIconBitmap(int size = 32)
+    {
+        var bitmap = new Bitmap(size, size);
+        using var graphics = Graphics.FromImage(bitmap);
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+        graphics.Clear(Color.Transparent);
+
+        float scale = size / 32f;
+
+        using (var background = new SolidBrush(Color.FromArgb(255, 31, 190, 116))) // QQ 绿
+        {
+            graphics.FillEllipse(background, 1 * scale, 1 * scale, 30 * scale, 30 * scale);
+        }
+
+        using (var font = new Font("Segoe UI Symbol", 17f * scale, FontStyle.Bold, GraphicsUnit.Pixel))
+        using (var format = new StringFormat
+               {
+                   Alignment = StringAlignment.Center,
+                   LineAlignment = StringAlignment.Center,
+               })
+        {
+            graphics.DrawString("♪", font, Brushes.White,
+                new RectangleF(1 * scale, 2 * scale, 30 * scale, 30 * scale), format);
+        }
+
+        return bitmap;
+    }
+
+    /// <summary>菜单图标：齿轮（设置）。设计坐标 24×24：外圈 r=6.4、内圈 r=2.6，再加 8 根向外的齿。</summary>
     public static Bitmap CreateGearBitmap(Color color, int size)
     {
         var bitmap = NewBitmap(size);

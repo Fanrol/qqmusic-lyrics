@@ -18,7 +18,7 @@ namespace QQMusicLyrics.UI;
 public sealed class TrayIcon : IDisposable
 {
     /// <summary>菜单项上下留白，让行距松一点。</summary>
-    private static readonly Padding ItemPadding = new(2, 7, 2, 7);
+    private static readonly Padding ItemPadding = new(8, 7, 8, 7);
 
     /// <summary>菜单图标的绘制颜色（菜单是浅色底）。</summary>
     private static readonly Color MenuGlyphColor = Color.FromArgb(60, 60, 60);
@@ -57,7 +57,7 @@ public sealed class TrayIcon : IDisposable
         {
             ShowImageMargin = true, // 给左侧图标留出位置
             Font = new Font("Microsoft YaHei UI", 9f),
-            ImageScalingSize = new Size(16, 16),
+            ImageScalingSize = new Size(18, 18),
         };
         BuildMenu();
 
@@ -142,7 +142,7 @@ public sealed class TrayIcon : IDisposable
                  })
         {
             item.AutoSize = false;
-            item.Width = 184;
+            item.Width = 200;
             // 行高刻意贴近"文字高度 + 上下留白"：默认实现把文字按内容区顶部对齐，
             // 行高多出来的部分全落在文字下面，看起来就偏上了（实测差约 5.7px）。
             // 把高度收到 29 之后，内容区高度≈文字高度，文字自然就居中、和图标对齐了。
