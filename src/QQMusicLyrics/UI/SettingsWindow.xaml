@@ -127,7 +127,7 @@
                     </StackPanel>
                 </Border>
 
-                <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                <ScrollViewer Grid.Column="1" Focusable="False" FocusVisualStyle="{x:Null}" VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="ContentPanel" Margin="24,20,24,20">
                         <TextBlock Text="快捷键" FontSize="15" Foreground="#2F2F2F" Margin="0,0,0,14" />
