@@ -25,18 +25,42 @@
             <!-- 标题栏（可拖动） -->
             <Grid x:Name="TitleBar" Grid.Row="0" Background="Transparent"
                   MouseLeftButtonDown="TitleBar_MouseLeftButtonDown">
+                <!-- 标题栏底部分隔线，贯通到最右边 -->
+                <Border VerticalAlignment="Bottom" Height="1" Background="#DCDCDC" />
+
                 <TextBlock Text="设置" Margin="16,0,0,0" VerticalAlignment="Center"
                            Foreground="#3A3A3A" FontSize="13" />
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Border x:Name="MinimizeButton" Width="44" Height="38" Background="Transparent"
+                    <Border x:Name="MinimizeButton" Width="38" Height="38"
                             Cursor="Hand" MouseLeftButtonDown="MinimizeButton_Click">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Background">
+                                    <Setter.Value>
+                                        <SolidColorBrush Color="#00FBFBFB" />
+                                    </Setter.Value>
+                                </Setter>
                                 <Style.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Background" Value="#FBFBFB" />
+                                        <Trigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <ColorAnimation
+                                                        Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                        To="#FFFBFBFB" Duration="0:0:0.12" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </Trigger.EnterActions>
+                                        <Trigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <ColorAnimation
+                                                        Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                        To="#00FBFBFB" Duration="0:0:0.18" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </Trigger.ExitActions>
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
@@ -45,14 +69,35 @@
                               HorizontalAlignment="Center" VerticalAlignment="Center" />
                     </Border>
 
-                    <Border x:Name="CloseButton" Width="44" Height="38" Background="Transparent"
+                    <Border x:Name="CloseButton" Width="38" Height="38"
                             Cursor="Hand" MouseLeftButtonDown="CloseButton_Click">
                         <Border.Style>
                             <Style TargetType="Border">
-                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="Background">
+                                    <Setter.Value>
+                                        <SolidColorBrush Color="#00FBFBFB" />
+                                    </Setter.Value>
+                                </Setter>
                                 <Style.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Background" Value="#FBFBFB" />
+                                        <Trigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <ColorAnimation
+                                                        Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                        To="#FFFBFBFB" Duration="0:0:0.12" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </Trigger.EnterActions>
+                                        <Trigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <ColorAnimation
+                                                        Storyboard.TargetProperty="(Border.Background).(SolidColorBrush.Color)"
+                                                        To="#00FBFBFB" Duration="0:0:0.18" />
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </Trigger.ExitActions>
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
@@ -71,7 +116,7 @@
                 </Grid.ColumnDefinitions>
 
                 <Border Grid.Column="0" Background="#E9E9E9"
-                        BorderBrush="#DCDCDC" BorderThickness="0,1,1,0">
+                        BorderBrush="#DCDCDC" BorderThickness="0,0,1,0">
                     <StackPanel x:Name="CategoryList" Margin="0,10,0,0">
                         <Border x:Name="ShortcutCategory" Height="36" Background="#F1F1F1" Cursor="Hand">
                             <TextBlock Text="快捷键" Margin="18,0,0,0" VerticalAlignment="Center"
